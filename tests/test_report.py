@@ -54,6 +54,42 @@ def test_suppressed_cells_render_as_marker_not_blank():
     assert "&lt;10" in html or "<10" in html
 
 
+def test_float_columns_render_at_one_decimal_not_full_precision():
+    tables = _tables()
+    tables["time_to_icu_by_subtype"] = pd.DataFrame({
+        "arf_subtype": ["hypercapnic"], "n": [425], "median_hours": [-3.3333333333333335],
+        "q25_hours": [-5.516666666666667], "q75_hours": [0.3333333333333333],
+        "pct_before_icu": [74.3529411764706],
+    })
+    html = render_report(tables, charts={}, meta={"site": "ucmc", "year": 2024})
+    assert "-3.3" in html
+    assert "-3.333333" not in html
+    assert "74.4" in html
+    assert "74.352941" not in html
+
+
+def test_integer_counts_render_as_whole_numbers():
+    tables = _tables()
+    tables["time_to_icu_by_subtype"] = pd.DataFrame({
+        "arf_subtype": ["hypercapnic"], "n": [425], "median_hours": [-3.3],
+        "q25_hours": [-5.5], "q75_hours": [0.3], "pct_before_icu": [74.4],
+    })
+    html = render_report(tables, charts={}, meta={"site": "ucmc", "year": 2024})
+    assert "425" in html
+    assert "425.0" not in html
+
+
+def test_suppressed_float_row_still_renders_marker_not_nan():
+    tables = _tables()
+    tables["time_to_icu_by_subtype"] = pd.DataFrame({
+        "arf_subtype": ["hypercapnic"], "n": [pd.NA], "median_hours": [pd.NA],
+        "q25_hours": [pd.NA], "q75_hours": [pd.NA], "pct_before_icu": [pd.NA],
+    })
+    html = render_report(tables, charts={}, meta={"site": "ucmc", "year": 2024})
+    assert "<10" in html
+    assert "nan" not in html.lower()
+
+
 def test_charts_are_embedded_inline_when_supplied():
     html = render_report(_tables(), charts={"imv": "data:image/png;base64,AAA"},
                          meta={"site": "ucmc", "year": 2024})

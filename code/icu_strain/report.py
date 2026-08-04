@@ -178,9 +178,42 @@ footer.report-footer {
 """.strip()
 
 
+def _format_display_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Pre-format every cell to its final display string.
+
+    Each column is handled by its own dtype:
+    - float64 (hour-scale deltas, percentages): one decimal place. Six
+      decimal places on a clinical median duration implies a precision the
+      underlying measurement doesn't support, and the chart/prose elsewhere
+      in the report already round to roughly this precision, so the tables
+      should match rather than contradict them.
+    - integer / nullable Int64 (counts): rendered as a plain whole number,
+      never "425.0".
+    - anything else (strings): passed through unchanged.
+
+    NA is handled per-cell with `pd.isna`, not via `DataFrame.to_html`'s
+    `na_rep`: `na_rep` only reliably fires for a real float64 NaN. An Int64
+    column's `pd.NA` (exactly what `aggregate.suppress_small_cells` /
+    `suppress_small_rows` produce) or an object column's `pd.NA` both fall
+    through `na_rep` and print as pandas' own "<NA>" repr instead -- silently
+    defeating the suppression marker. Formatting to strings ourselves, cell
+    by cell, sidesteps that dtype-dependent behavior entirely.
+    """
+    out = df.copy()
+    for col in out.columns:
+        s = out[col]
+        if pd.api.types.is_float_dtype(s):
+            out[col] = s.map(lambda v: "<10" if pd.isna(v) else f"{v:.1f}")
+        elif pd.api.types.is_integer_dtype(s):
+            out[col] = s.map(lambda v: "<10" if pd.isna(v) else f"{int(v)}")
+        else:
+            out[col] = s.map(lambda v: "<10" if pd.isna(v) else v)
+    return out
+
+
 def _table_html(df: pd.DataFrame) -> str:
     """Render a DataFrame as HTML with suppressed cells shown as `<10`."""
-    inner = df.to_html(index=False, na_rep="<10", escape=False, border=0)
+    inner = _format_display_frame(df).to_html(index=False, escape=False, border=0)
     return f'<div class="table-wrap">{inner}</div>'
 
 
