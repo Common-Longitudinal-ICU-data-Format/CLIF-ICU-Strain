@@ -1,6 +1,7 @@
 """Per-month data availability. Run from repo root."""
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -10,12 +11,14 @@ import pandas as pd
 from clifpy import ClifOrchestrator
 
 from icu_strain import definitions as d
+from icu_strain.paths import final_dir, phi_dir
 
-config = json.loads(Path("config/config.json").read_text())
-out_dir = Path("output/final_no_phi")
+config_path = Path(os.environ.get("CLIF_CONFIG_PATH", "config/config.json"))
+config = json.loads(config_path.read_text())
+out_dir = final_dir()
 out_dir.mkdir(parents=True, exist_ok=True)
 
-cohort = pd.read_parquet("output/intermediate_phi/cohort.parquet")
+cohort = pd.read_parquet(phi_dir() / "cohort.parquet")
 cohort_ids = cohort["hospitalization_id"].unique().tolist()
 
 # Push the hospitalization_id filter into the DuckDB scan (clifpy's `filters`

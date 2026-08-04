@@ -1,6 +1,7 @@
 """Build the ICU cohort for the analysis year. Run from repo root."""
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -10,10 +11,17 @@ from clifpy import ClifOrchestrator
 
 from icu_strain import definitions as d
 from icu_strain.cohort import build_cohort
+from icu_strain.paths import phi_dir
 
-config = json.loads(Path("config/config.json").read_text())
-out_dir = Path("output/intermediate_phi")
+config_path = Path(os.environ.get("CLIF_CONFIG_PATH", "config/config.json"))
+config = json.loads(config_path.read_text())
+out_dir = phi_dir()
 out_dir.mkdir(parents=True, exist_ok=True)
+
+# Overridable so the end-to-end demo test can point at whatever year the
+# bundled synthetic dataset actually contains, without touching the constant
+# that governs the real site analysis.
+year = int(os.environ.get("CLIF_ANALYSIS_YEAR", d.ANALYSIS_YEAR))
 
 co = ClifOrchestrator(
     data_directory=config["data_directory"],
@@ -22,6 +30,6 @@ co = ClifOrchestrator(
 )
 co.initialize(tables=["hospitalization", "adt"])
 
-cohort = build_cohort(co.hospitalization.df, co.adt.df, year=d.ANALYSIS_YEAR, min_age=d.MIN_AGE)
+cohort = build_cohort(co.hospitalization.df, co.adt.df, year=year, min_age=d.MIN_AGE)
 cohort.to_parquet(out_dir / "cohort.parquet", index=False)
-print(f"cohort: {len(cohort):,} hospitalizations with an index ICU stay in {d.ANALYSIS_YEAR}")
+print(f"cohort: {len(cohort):,} hospitalizations with an index ICU stay in {year}")

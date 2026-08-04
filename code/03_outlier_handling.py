@@ -12,6 +12,7 @@ so running it unfiltered exhausted memory for no analytic benefit.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -21,11 +22,13 @@ import pandas as pd
 from clifpy import ClifOrchestrator, apply_outlier_handling, process_resp_support_waterfall
 
 from icu_strain import definitions as d
+from icu_strain.paths import final_dir, phi_dir as phi_dir_path
 from icu_strain.pipeline import restore_device_category_case
 
-config = json.loads(Path("config/config.json").read_text())
-phi_dir = Path("output/intermediate_phi")
-out_dir = Path("output/final_no_phi")
+config_path = Path(os.environ.get("CLIF_CONFIG_PATH", "config/config.json"))
+config = json.loads(config_path.read_text())
+phi_dir = phi_dir_path()
+out_dir = final_dir()
 out_dir.mkdir(parents=True, exist_ok=True)
 
 cohort = pd.read_parquet(phi_dir / "cohort.parquet")
