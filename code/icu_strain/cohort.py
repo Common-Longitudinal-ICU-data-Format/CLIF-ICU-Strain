@@ -24,10 +24,13 @@ def collapse_icu_blocks(adt: pd.DataFrame, gap_hours: float = d.ICU_BLOCK_GAP_HO
 
     icu = df[df["_is_icu"]]
     if icu.empty:
-        return pd.DataFrame(
-            columns=["hospitalization_id", "icu_admit_dttm", "icu_discharge_dttm",
-                     "block_index", "n_adt_rows_merged"]
-        )
+        return pd.DataFrame({
+            "hospitalization_id": pd.Series(dtype="object"),
+            "icu_admit_dttm": pd.Series(dtype="datetime64[ns]"),
+            "icu_discharge_dttm": pd.Series(dtype="datetime64[ns]"),
+            "block_index": pd.Series(dtype="int64"),
+            "n_adt_rows_merged": pd.Series(dtype="int64"),
+        })
 
     out = (
         icu.groupby(["hospitalization_id", "_block"], as_index=False)
