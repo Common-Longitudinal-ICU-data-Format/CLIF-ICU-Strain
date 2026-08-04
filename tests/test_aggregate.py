@@ -52,3 +52,66 @@ def test_time_to_icu_reports_negative_deltas_as_pre_icu():
     assert out.loc["hypoxemic", "n"] == 2
     assert out.loc["hypoxemic", "median_hours"] == -1.0   # median of (-4, +2)
     assert out.loc["hypoxemic", "pct_before_icu"] == 50.0
+
+
+def test_suppression_preserves_integer_dtype_and_float_columns_untouched():
+    df = pd.DataFrame({
+        "n_int": pd.array([0, 5, 40], dtype="int64"),
+        "pct_before_icu": [0.0, 5.0, 99.9],
+    })
+    out = suppress_small_cells(df, ["n_int", "pct_before_icu"], min_n=10)
+
+    # Integer column keeps integer semantics through suppression and CSV rendering
+    # (a naive mask() upcasts int64 -> float64, so 40 would round-trip as "40.0").
+    assert out.loc[2, "n_int"] == 40
+    assert pd.api.types.is_integer_dtype(out["n_int"])
+    csv_text = out[["n_int"]].to_csv(index=False)
+    assert "40.0" not in csv_text
+    assert "40" in csv_text
+    assert pd.isna(out.loc[1, "n_int"])
+
+    # Float columns (e.g. median_hours, pct_before_icu) must NOT be coerced to Int64.
+    assert pd.api.types.is_float_dtype(out["pct_before_icu"])
+    assert out.loc[0, "pct_before_icu"] == 0.0
+    assert pd.isna(out.loc[1, "pct_before_icu"])
+    assert out.loc[2, "pct_before_icu"] == 99.9
+
+
+def test_monthly_imv_counts_on_hand_built_empty_frame_does_not_raise():
+    # Untyped empty frame: the exact pattern (pd.DataFrame(columns=[...])) that
+    # previously caused a `.dt` accessor crash elsewhere in this codebase.
+    imv = pd.DataFrame(columns=["hospitalization_id", "imv_start_dttm"])
+    out = monthly_imv_counts(imv)
+    assert list(out.columns) == ["month", "n_new_imv"]
+    assert len(out) == 0
+
+
+def test_monthly_subtype_counts_on_hand_built_empty_frame_does_not_raise():
+    cohort = pd.DataFrame(columns=["hospitalization_id", "icu_admit_dttm"])
+    classified = pd.DataFrame(columns=["hospitalization_id", "arf_subtype", "first_arf_dttm"])
+    out = monthly_subtype_counts(cohort, classified)
+    assert list(out.columns) == ["month", "hypoxemic", "hypercapnic", "mixed", "total"]
+    assert len(out) == 0
+
+
+def test_time_to_icu_summary_on_hand_built_empty_frame_does_not_raise():
+    cohort = pd.DataFrame(columns=["hospitalization_id", "icu_admit_dttm"])
+    classified = pd.DataFrame(columns=["hospitalization_id", "arf_subtype", "first_arf_dttm"])
+    out = time_to_icu_summary(cohort, classified)
+    assert list(out.columns) == [
+        "arf_subtype", "n", "median_hours", "q25_hours", "q75_hours", "pct_before_icu",
+    ]
+    assert len(out) == 0
+
+
+def test_monthly_imv_counts_deduplicates_hospitalization_across_months():
+    # H1 has an IMV-start row in both January and February. It represents one
+    # hospitalization's first IMV initiation, so it must be counted exactly
+    # once, in the earlier month -- not once per month it happens to appear in.
+    imv = pd.DataFrame({
+        "hospitalization_id": ["H1", "H1", "H2"],
+        "imv_start_dttm": pd.to_datetime(["2024-01-15", "2024-02-01", "2024-02-05"]),
+    })
+    out = monthly_imv_counts(imv).set_index("month")
+    assert out.loc["2024-01", "n_new_imv"] == 1
+    assert out.loc["2024-02", "n_new_imv"] == 1
