@@ -105,14 +105,25 @@ def evaluate_hypercapnia(labs: pd.DataFrame, tolerance_min: int = d.ABG_PAIR_TOL
     # input-order dependency, deterministically, on every run: verified
     # empirically that pandas' `nearest` resolves an exact tie by taking the
     # LAST candidate in ascending-sorted order, so among tied ph draws the
-    # larger of the tied values always wins (the pco2 side of a tie is not
-    # actually ambiguous -- merge_asof emits one output row per LEFT row, so
-    # each tied pco2 draw gets its own independent match regardless of sort
-    # order; the secondary pco2 key is kept anyway for symmetry/clarity).
-    # This is a reproducibility rule, not a clinical one -- there is no
-    # principled basis to prefer one of two simultaneous conflicting draws
-    # on clinical grounds, so the rule is applied mechanically rather than
-    # tuned toward over- or under-diagnosis.
+    # larger of the tied values always wins.
+    #
+    # This resolution is NOT direction-neutral. merge_asof emits one output
+    # row per LEFT (pco2) row, so a tie among duplicate pco2 draws is never
+    # actually arbitrated -- each gets its own independent match regardless
+    # of sort order (the secondary pco2 sort key is kept only for symmetry
+    # with the ph key, not because it resolves anything). The ONLY tie the
+    # merge ever resolves is on the ph side, and since the criterion is
+    # `ph < 7.35`, picking the LARGER of two tied ph values can only ever
+    # make hypercapnia qualification LESS likely, never more -- so this rule
+    # leans, one-directionally, toward under-detecting hypercapnia on a
+    # conflicting-duplicate draw. The magnitude is presumably small (this
+    # only fires on an exact-timestamp value conflict, not on every
+    # duplicate), but it is a real, one-sided effect, not a neutral
+    # tie-break. It was chosen for reproducibility, not clinical intent --
+    # there is no principled basis to prefer one of two simultaneous
+    # conflicting draws on clinical grounds -- but its actual behavior is
+    # conservative toward NOT classifying hypercapnic, and should be
+    # described that way rather than as direction-neutral.
     paired = pd.merge_asof(
         pco2.sort_values(["pco2_dttm", "pco2"], kind="stable"),
         ph.sort_values(["ph_dttm", "ph"], kind="stable"),

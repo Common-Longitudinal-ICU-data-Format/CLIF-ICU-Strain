@@ -62,12 +62,18 @@ def _dedupe_resp_timestamps(resp: pd.DataFrame) -> pd.DataFrame:
     site's data, device_category and fio2_set were already identical
     between the duplicates (so this is a no-op there); this guards the
     general, multi-site case where they might not be.
+
+    na_position="last" is deliberate: a tie between a populated row and a
+    null row must keep the populated one. device_category is ~46% NULL in
+    the raw table (before ffill), so a null/non-null tie is a realistic
+    multi-site scenario, not a hypothetical -- sorting NaN first would keep
+    the LESS informative row and silently discard real device/FiO2 state.
     """
     if resp.empty:
         return resp
     key = ["hospitalization_id", "recorded_dttm"]
     return (
-        resp.sort_values([*key, "device_category", "fio2_set"], na_position="first", kind="stable")
+        resp.sort_values([*key, "device_category", "fio2_set"], na_position="last", kind="stable")
         .drop_duplicates(subset=key, keep="first")
         .reset_index(drop=True)
     )
