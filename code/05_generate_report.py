@@ -21,9 +21,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from icu_strain.paths import final_dir
 from icu_strain.report import PALETTE, render_report
 
-out_dir = Path("output/final_no_phi")
+out_dir = final_dir()
 
 SUBTYPE_ORDER = ["hypoxemic", "hypercapnic", "mixed"]
 SUBTYPE_LABELS = {"hypoxemic": "Hypoxemic", "hypercapnic": "Hypercapnic", "mixed": "Mixed"}

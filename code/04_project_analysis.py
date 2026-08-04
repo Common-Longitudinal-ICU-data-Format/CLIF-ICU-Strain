@@ -11,11 +11,12 @@ from icu_strain.aggregate import (
     monthly_imv_counts, monthly_subtype_counts, suppress_small_cells, suppress_small_rows,
     time_to_icu_summary,
 )
+from icu_strain.paths import final_dir, phi_dir as phi_dir_path
 from icu_strain.physiology import classify_arf, evaluate_hypercapnia, evaluate_hypoxemia
 from icu_strain.pipeline import attach_abg_availability, build_observation_frame, first_imv_starts
 
-phi_dir = Path("output/intermediate_phi")
-out_dir = Path("output/final_no_phi")
+phi_dir = phi_dir_path()
+out_dir = final_dir()
 out_dir.mkdir(parents=True, exist_ok=True)
 
 cohort = pd.read_parquet(phi_dir / "cohort.parquet")
