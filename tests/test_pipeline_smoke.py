@@ -72,6 +72,46 @@ def test_resp_duplicate_timestamp_tie_resolves_deterministically():
     assert row_b["device_category"] == "IMV"
 
 
+def test_resp_duplicate_timestamp_tie_keeps_populated_row_over_null():
+    # One of the two tied rows has null device_category/fio2_set (the
+    # pre-ffill, "we don't know yet" state); the other is populated. The
+    # populated row must always win, regardless of which one arrives first
+    # -- a null/non-null tie is a realistic multi-site case (device_category
+    # is ~46% NULL in the raw table), not a hypothetical. na_position="first"
+    # would sort the null row to the front and keep it via keep="first",
+    # silently discarding the real device state; na_position="last" is the
+    # fix under test here.
+    cohort = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "window_start": pd.to_datetime(["2024-01-01 00:00"]),
+        "window_end": pd.to_datetime(["2024-01-02 00:00"]),
+    })
+    vitals = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "recorded_dttm": pd.to_datetime(["2024-01-01 05:00"]),
+        "vital_category": ["spo2"],
+        "vital_value": [88.0],
+    })
+    labs = pd.DataFrame(columns=["hospitalization_id", "lab_result_dttm", "lab_category", "lab_value_numeric"])
+    resp_null_first = pd.DataFrame({
+        "hospitalization_id": ["H1", "H1"],
+        "recorded_dttm": pd.to_datetime(["2024-01-01 04:00", "2024-01-01 04:00"]),
+        "device_category": [None, "Room Air"],
+        "fio2_set": [None, 0.21],
+    })
+    resp_null_last = resp_null_first.iloc[::-1].reset_index(drop=True)
+
+    row_a = build_observation_frame(cohort, labs, vitals, resp_null_first)
+    row_a = row_a[row_a["spo2"].notna()].iloc[0]
+    row_b = build_observation_frame(cohort, labs, vitals, resp_null_last)
+    row_b = row_b[row_b["spo2"].notna()].iloc[0]
+
+    assert row_a["device_category"] == "Room Air"
+    assert row_b["device_category"] == "Room Air"
+    assert row_a["fio2"] == 0.21
+    assert row_b["fio2"] == 0.21
+
+
 def test_observation_frame_dttm_tz_matches_cohort_not_duckdbs_own_alias():
     # DuckDB's ASOF JOIN round-trip returns tz-aware timestamps localized to
     # its own IANA alias (e.g. "America/Chicago") regardless of what the

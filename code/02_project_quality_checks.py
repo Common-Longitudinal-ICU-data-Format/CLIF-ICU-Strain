@@ -30,7 +30,10 @@ co = ClifOrchestrator(
 co.initialize(
     tables=["labs", "vitals", "respiratory_support"],
     columns={
-        "labs": ["hospitalization_id", "lab_category", "lab_result_dttm"],
+        # lab_value_numeric is needed here (beyond category/dttm) to tell a
+        # benign exact-duplicate row apart from a genuine value conflict --
+        # see the dup-key quality metrics below.
+        "labs": ["hospitalization_id", "lab_category", "lab_result_dttm", "lab_value_numeric"],
         "vitals": ["hospitalization_id", "recorded_dttm", "vital_category"],
         "respiratory_support": ["hospitalization_id", "recorded_dttm", "fio2_set", "device_category"],
     },
@@ -75,5 +78,32 @@ qc = pd.DataFrame(rows)
 # would otherwise compare a cohort-conditional rate here against another
 # site's site-wide rate under the same column name.
 qc["device_null_rate_cohort"] = 100.0 * resp["device_category"].isna().mean()
+
+# Duplicate-key quality signal, overall (not per-month): what fraction of
+# cohort-scoped arterial lab rows (po2_arterial/pco2_arterial/ph_arterial)
+# share a (hospitalization_id, lab_result_dttm, lab_category) key with
+# another row. Reported as two SEPARATE rates because they are different
+# problems: an identical-value duplicate is a benign redundant record, but a
+# differing-value duplicate is a genuine conflict that physiology.
+# evaluate_hypercapnia must arbitrarily-but-deterministically resolve (see
+# its merge_asof tie-break). This rate determines whether this site's
+# hypercapnic/mixed counts are comparable to a site without the same
+# duplication -- collapsing the two into one number would hide which
+# problem (if either) a given site actually has.
+dup_key = ["hospitalization_id", "lab_result_dttm", "lab_category"]
+arterial_labs = labs[labs["lab_category"].isin(arterial)]
+n_arterial = len(arterial_labs)
+if n_arterial:
+    group_size = arterial_labs.groupby(dup_key)["lab_value_numeric"].transform("size")
+    group_nunique = arterial_labs.groupby(dup_key)["lab_value_numeric"].transform("nunique")
+    is_conflicting_dup = (group_size > 1) & (group_nunique > 1)
+    is_identical_dup = (group_size > 1) & (group_nunique == 1)
+    pct_conflicting = 100.0 * is_conflicting_dup.sum() / n_arterial
+    pct_identical = 100.0 * is_identical_dup.sum() / n_arterial
+else:
+    pct_conflicting = pct_identical = 0.0
+qc["pct_arterial_dup_key_conflicting_overall"] = pct_conflicting
+qc["pct_arterial_dup_key_identical_overall"] = pct_identical
+
 qc.to_csv(out_dir / "quality_checks.csv", index=False)
 print(qc.to_string(index=False))
