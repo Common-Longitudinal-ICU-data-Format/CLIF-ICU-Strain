@@ -124,6 +124,39 @@ def test_ph_at_735_does_not_qualify():
     assert out.empty
 
 
+def test_exact_timestamp_tie_resolves_deterministically_by_value():
+    # Two pH draws recorded at the EXACT same timestamp as one PaCO2 draw --
+    # a real raw-CLIF-labs artifact (duplicate/conflicting simultaneous
+    # draws; observed at one site on ~90% of arterial lab rows), not a
+    # hypothetical. One pH qualifies (7.30 < 7.35), the other does not
+    # (7.40). Without a deterministic secondary sort key, merge_asof's tie
+    # resolution depends on input row order -- pandas' stable sort preserves
+    # the original relative order for exact ties, and that order depends on
+    # upstream parquet scan order, which is not guaranteed stable across
+    # runs. Verified empirically: merge_asof(direction="nearest") resolves
+    # an exact tie by taking the LAST candidate after ascending-value sort,
+    # i.e. the larger of two tied values always wins. Here that resolves to
+    # ph=7.40, which does NOT qualify -- and both input orderings of the tied
+    # rows must agree, proving the outcome no longer depends on row order.
+    qualifying_row_first = _labs([
+        ("H1", "2024-03-01 12:00", d.ABG_PCO2, 50.0),
+        ("H1", "2024-03-01 12:00", d.ABG_PH, 7.30),
+        ("H1", "2024-03-01 12:00", d.ABG_PH, 7.40),
+    ])
+    qualifying_row_last = _labs([
+        ("H1", "2024-03-01 12:00", d.ABG_PCO2, 50.0),
+        ("H1", "2024-03-01 12:00", d.ABG_PH, 7.40),
+        ("H1", "2024-03-01 12:00", d.ABG_PH, 7.30),
+    ])
+    out_a = evaluate_hypercapnia(qualifying_row_first, tolerance_min=5)
+    out_b = evaluate_hypercapnia(qualifying_row_last, tolerance_min=5)
+    # Documented rule: the tie resolves to the larger ph (7.40), which does
+    # not qualify hypercapnia -- regardless of which order the tied rows
+    # arrived in.
+    assert out_a.empty
+    assert out_b.empty
+
+
 def test_missing_arterial_category_does_not_crash_classify_arf():
     # A site whose category mapping has no pco2_arterial or ph_arterial rows
     # at all (only venous here) must flow cleanly through evaluate_hypercapnia

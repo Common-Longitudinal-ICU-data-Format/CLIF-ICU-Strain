@@ -32,6 +32,46 @@ def test_observation_frame_attaches_most_recent_support_state():
     assert row["fio2"] == 0.21
 
 
+def test_resp_duplicate_timestamp_tie_resolves_deterministically():
+    # Two resp rows tied at the exact same (hospitalization_id,
+    # recorded_dttm) but disagreeing on device_category -- the same class of
+    # raw-data artifact found in real arterial labs (see
+    # test_exact_timestamp_tie_resolves_deterministically_by_value in
+    # test_physiology_criteria.py), here guarded against in respiratory_support
+    # too since the ASOF JOIN below needs exactly one row to represent state
+    # at a given instant. Without a deterministic tiebreak, which row DuckDB's
+    # ASOF JOIN attaches could depend on scan order. Both input orderings of
+    # the tied rows must agree, and on the documented rule: ascending sort by
+    # device_category, so "IMV" (< "Room Air" alphabetically) wins.
+    cohort = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "window_start": pd.to_datetime(["2024-01-01 00:00"]),
+        "window_end": pd.to_datetime(["2024-01-02 00:00"]),
+    })
+    vitals = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "recorded_dttm": pd.to_datetime(["2024-01-01 05:00"]),
+        "vital_category": ["spo2"],
+        "vital_value": [88.0],
+    })
+    labs = pd.DataFrame(columns=["hospitalization_id", "lab_result_dttm", "lab_category", "lab_value_numeric"])
+    resp_a = pd.DataFrame({
+        "hospitalization_id": ["H1", "H1"],
+        "recorded_dttm": pd.to_datetime(["2024-01-01 04:00", "2024-01-01 04:00"]),
+        "device_category": ["IMV", "Room Air"],
+        "fio2_set": [0.5, 0.21],
+    })
+    resp_b = resp_a.iloc[::-1].reset_index(drop=True)
+
+    row_a = build_observation_frame(cohort, labs, vitals, resp_a)
+    row_a = row_a[row_a["spo2"].notna()].iloc[0]
+    row_b = build_observation_frame(cohort, labs, vitals, resp_b)
+    row_b = row_b[row_b["spo2"].notna()].iloc[0]
+
+    assert row_a["device_category"] == "IMV"
+    assert row_b["device_category"] == "IMV"
+
+
 def test_observation_frame_dttm_tz_matches_cohort_not_duckdbs_own_alias():
     # DuckDB's ASOF JOIN round-trip returns tz-aware timestamps localized to
     # its own IANA alias (e.g. "America/Chicago") regardless of what the
