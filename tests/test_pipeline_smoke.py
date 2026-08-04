@@ -1,5 +1,10 @@
 import pandas as pd
-from icu_strain.pipeline import build_observation_frame, first_imv_starts, restore_device_category_case
+from icu_strain.pipeline import (
+    attach_abg_availability,
+    build_observation_frame,
+    first_imv_starts,
+    restore_device_category_case,
+)
 
 
 def test_observation_frame_attaches_most_recent_support_state():
@@ -97,7 +102,54 @@ def test_first_imv_start_is_earliest_within_index_icu_stay():
     out = first_imv_starts(cohort, resp)
     assert len(out) == 1
     # The pre-ICU IMV row is outside the index stay and must not count.
-    assert out.iloc[0]["imv_start_dttm"] == pd.Timestamp("2024-01-02 00:00")
+    assert out.iloc[0]["imv_any_start_dttm"] == pd.Timestamp("2024-01-02 00:00")
+    # Every in-stay row is IMV, so the very first in-stay row has no
+    # preceding in-stay row to compare against -- not a detectable "new"
+    # intubation (same pattern as already-ventilated-on-arrival).
+    assert pd.isna(out.iloc[0]["imv_new_start_dttm"])
+
+
+def test_first_imv_start_already_intubated_on_arrival_counts_any_not_new():
+    # First in-stay respiratory-support row is already IMV -- the waterfall
+    # forward-fills from before ICU admission, so this looks identical to a
+    # patient who arrived from the ED/OR already ventilated. That must count
+    # as an IMV *stay*, but must NOT be read as a new intubation event.
+    cohort = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "icu_admit_dttm": pd.to_datetime(["2024-01-01 00:00"]),
+        "icu_discharge_dttm": pd.to_datetime(["2024-01-05 00:00"]),
+    })
+    resp = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "recorded_dttm": pd.to_datetime(["2024-01-01 00:00"]),
+        "device_category": ["IMV"],
+        "fio2_set": [0.5],
+    })
+    out = first_imv_starts(cohort, resp)
+    assert len(out) == 1
+    assert out.iloc[0]["imv_any_start_dttm"] == pd.Timestamp("2024-01-01 00:00")
+    assert pd.isna(out.iloc[0]["imv_new_start_dttm"])
+
+
+def test_first_imv_start_transition_to_imv_counts_as_both_any_and_new():
+    # Patient starts on Room Air, then transitions to IMV within the stay --
+    # a genuine new intubation, so it must show up in both columns at the
+    # same timestamp.
+    cohort = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "icu_admit_dttm": pd.to_datetime(["2024-01-01 00:00"]),
+        "icu_discharge_dttm": pd.to_datetime(["2024-01-05 00:00"]),
+    })
+    resp = pd.DataFrame({
+        "hospitalization_id": ["H1", "H1"],
+        "recorded_dttm": pd.to_datetime(["2024-01-01 00:00", "2024-01-02 00:00"]),
+        "device_category": ["Room Air", "IMV"],
+        "fio2_set": [0.21, 0.5],
+    })
+    out = first_imv_starts(cohort, resp)
+    assert len(out) == 1
+    assert out.iloc[0]["imv_any_start_dttm"] == pd.Timestamp("2024-01-02 00:00")
+    assert out.iloc[0]["imv_new_start_dttm"] == pd.Timestamp("2024-01-02 00:00")
 
 
 def test_restore_device_category_case_undoes_waterfall_lowercasing():
@@ -113,3 +165,67 @@ def test_restore_device_category_case_undoes_waterfall_lowercasing():
     assert out["device_category"].iloc[0] == "IMV"
     assert out["device_category"].iloc[1] == "Room Air"
     assert pd.isna(out["device_category"].iloc[2])
+
+
+def test_restore_device_category_case_falls_back_to_original_for_unmapped_value():
+    # "hfnc" is not CLIF 2.1 vocabulary (e.g. a CLIF 3.0 site's naming). A
+    # bare .map() would turn it into NaN, silently deleting the signal the
+    # same way the original bug did -- it must survive unchanged instead.
+    waterfall = pd.DataFrame({
+        "hospitalization_id": ["H1", "H1"],
+        "device_category": ["imv", "hfnc"],
+    })
+    out = restore_device_category_case(waterfall)
+    assert out["device_category"].iloc[0] == "IMV"
+    assert out["device_category"].iloc[1] == "hfnc"
+
+
+def test_attach_abg_availability_true_when_arterial_gas_in_window():
+    cohort = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "window_start": pd.to_datetime(["2024-01-01 00:00"]),
+        "window_end": pd.to_datetime(["2024-01-02 00:00"]),
+    })
+    labs = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "lab_result_dttm": pd.to_datetime(["2024-01-01 06:00"]),
+        "lab_category": ["po2_arterial"],
+        "lab_value_numeric": [80.0],
+    })
+    obs = pd.DataFrame({"hospitalization_id": ["H1"]})
+    out = attach_abg_availability(obs, labs, cohort)
+    assert out.iloc[0]["has_abg"] == True
+
+
+def test_attach_abg_availability_false_when_only_gas_is_outside_window():
+    cohort = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "window_start": pd.to_datetime(["2024-01-01 00:00"]),
+        "window_end": pd.to_datetime(["2024-01-02 00:00"]),
+    })
+    labs = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "lab_result_dttm": pd.to_datetime(["2024-01-05 06:00"]),  # after window_end
+        "lab_category": ["po2_arterial"],
+        "lab_value_numeric": [80.0],
+    })
+    obs = pd.DataFrame({"hospitalization_id": ["H1"]})
+    out = attach_abg_availability(obs, labs, cohort)
+    assert out.iloc[0]["has_abg"] == False
+
+
+def test_attach_abg_availability_false_for_venous_only():
+    cohort = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "window_start": pd.to_datetime(["2024-01-01 00:00"]),
+        "window_end": pd.to_datetime(["2024-01-02 00:00"]),
+    })
+    labs = pd.DataFrame({
+        "hospitalization_id": ["H1"],
+        "lab_result_dttm": pd.to_datetime(["2024-01-01 06:00"]),
+        "lab_category": ["pco2_venous"],
+        "lab_value_numeric": [45.0],
+    })
+    obs = pd.DataFrame({"hospitalization_id": ["H1"]})
+    out = attach_abg_availability(obs, labs, cohort)
+    assert out.iloc[0]["has_abg"] == False

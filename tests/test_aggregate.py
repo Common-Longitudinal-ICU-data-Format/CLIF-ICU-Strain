@@ -1,6 +1,7 @@
 import pandas as pd
 from icu_strain.aggregate import (
-    suppress_small_cells, monthly_imv_counts, monthly_subtype_counts, time_to_icu_summary,
+    suppress_small_cells, suppress_small_rows, monthly_imv_counts, monthly_subtype_counts,
+    time_to_icu_summary,
 )
 
 
@@ -102,6 +103,46 @@ def test_time_to_icu_summary_on_hand_built_empty_frame_does_not_raise():
         "arf_subtype", "n", "median_hours", "q25_hours", "q75_hours", "pct_before_icu",
     ]
     assert len(out) == 0
+
+
+def test_suppress_small_rows_masks_the_whole_row_when_n_below_threshold():
+    df = pd.DataFrame({
+        "arf_subtype": ["hypercapnic", "hypoxemic"],
+        "n": pd.array([3, 40], dtype="int64"),
+        "median_hours": [1.5, -2.0],
+        "q25_hours": [0.5, -5.0],
+        "q75_hours": [2.5, 1.0],
+        "pct_before_icu": [33.3, 51.0],
+    })
+    value_cols = ["median_hours", "q25_hours", "q75_hours", "pct_before_icu"]
+    out = suppress_small_rows(df, "n", value_cols, min_n=10)
+
+    small = out[out["arf_subtype"] == "hypercapnic"].iloc[0]
+    assert pd.isna(small["n"])
+    for c in value_cols:
+        assert pd.isna(small[c])
+
+    # n=40 row is untouched, and n is still a real int (not 40.0 in the CSV).
+    large = out[out["arf_subtype"] == "hypoxemic"].iloc[0]
+    assert large["n"] == 40
+    assert large["median_hours"] == -2.0
+    assert pd.api.types.is_integer_dtype(out["n"])
+
+
+def test_suppress_small_rows_keeps_int_dtype_when_nothing_is_suppressed():
+    # Regression: t3.loc[mask, cols] = pd.NA upcasts int64 -> float64 even
+    # when the mask matches zero rows, so a published n of 40 rendered as
+    # "40.0" in the CSV. suppress_small_rows must not have that bug.
+    df = pd.DataFrame({
+        "arf_subtype": ["hypoxemic"],
+        "n": pd.array([40], dtype="int64"),
+        "median_hours": [-2.0],
+    })
+    out = suppress_small_rows(df, "n", ["median_hours"], min_n=10)
+    assert pd.api.types.is_integer_dtype(out["n"])
+    csv_text = out[["n"]].to_csv(index=False)
+    assert "40.0" not in csv_text
+    assert "40" in csv_text
 
 
 def test_monthly_imv_counts_deduplicates_hospitalization_across_months():
