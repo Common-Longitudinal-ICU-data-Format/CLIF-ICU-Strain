@@ -10,6 +10,7 @@ row-level for it to leak, because it never loads anything row-level.
 import base64
 import datetime as dt
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -192,9 +193,13 @@ def main() -> None:
         "delta": make_delta_chart(tables["time_to_icu_by_subtype"]),
     }
 
+    # Written by 01_cohort_identification.py, not hardcoded: a report
+    # generated at any consortium site must show that site's own name and
+    # analysis year, not the reference site's.
+    run_meta = json.loads((out_dir / "run_meta.json").read_text())
     meta = {
-        "site": "demo",
-        "year": 2024,
+        "site": run_meta["site_name"],
+        "year": run_meta["analysis_year"],
         "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
 
