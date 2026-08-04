@@ -44,12 +44,43 @@ def restore_device_category_case(waterfall: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _dedupe_resp_timestamps(resp: pd.DataFrame) -> pd.DataFrame:
+    """Collapse resp rows that tie on (hospitalization_id, recorded_dttm).
+
+    process_resp_support_waterfall's own final dedup is a full-row
+    `drop_duplicates()`, which can still leave rows that agree on
+    (hospitalization_id, recorded_dttm) but differ in some other column it
+    carries. Both build_observation_frame's ASOF JOIN and
+    first_imv_starts' within-stay prev-state shift need exactly one row to
+    represent a hospitalization's device state at a given instant; left
+    undeduplicated, which literal row wins depends on scan/merge order,
+    which is not guaranteed stable across runs -- the same class of bug
+    fixed in physiology.evaluate_hypercapnia's merge_asof. Sorting on the
+    columns that actually drive downstream logic (device_category,
+    fio2_set) before keeping the first row makes the choice reproducible
+    regardless of upstream scan order. At every tie observed on one real
+    site's data, device_category and fio2_set were already identical
+    between the duplicates (so this is a no-op there); this guards the
+    general, multi-site case where they might not be.
+    """
+    if resp.empty:
+        return resp
+    key = ["hospitalization_id", "recorded_dttm"]
+    return (
+        resp.sort_values([*key, "device_category", "fio2_set"], na_position="first", kind="stable")
+        .drop_duplicates(subset=key, keep="first")
+        .reset_index(drop=True)
+    )
+
+
 def build_observation_frame(cohort, labs, vitals, resp) -> pd.DataFrame:
     """One row per lab/vital observation inside the window, with support state.
 
     ASOF JOIN attaches the most recent prior waterfall row, which is how the
     forward-filled device and FiO2 reach each observation.
     """
+    resp = _dedupe_resp_timestamps(resp)
+
     con = duckdb.connect()
     con.register("cohort", cohort)
     con.register("labs", labs)
@@ -137,6 +168,7 @@ def first_imv_starts(cohort: pd.DataFrame, resp: pd.DataFrame) -> pd.DataFrame:
     undetermined and conservatively excluded (they still count in
     imv_any_start_dttm).
     """
+    resp = _dedupe_resp_timestamps(resp)
     df = resp.merge(
         cohort[["hospitalization_id", "icu_admit_dttm", "icu_discharge_dttm"]],
         on="hospitalization_id", how="inner",

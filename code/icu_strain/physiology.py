@@ -89,9 +89,33 @@ def evaluate_hypercapnia(labs: pd.DataFrame, tolerance_min: int = d.ABG_PAIR_TOL
     # before a single one is discarded. `direction="nearest"` also collapses
     # to one nearest pH per PaCO2 draw, matching "the same arterial draw"
     # rather than "any pH within the window".
+    #
+    # Determinism: sorting on the "on" column alone is not enough. Real CLIF
+    # labs tables carry rows that tie exactly on (hospitalization_id,
+    # lab_result_dttm) for the same category but disagree on value -- a raw
+    # data-entry artifact (duplicate/conflicting simultaneous draws), ~90% of
+    # arterial rows at one observed site. `sort_values` is a stable sort, so
+    # among exact-dttm ties the row that ends up "first" (and therefore wins
+    # merge_asof's nearest-match) depends on the ORIGINAL row order handed
+    # in -- which for a DataFrame just read from parquet depends on scan
+    # order, not guaranteed stable across runs/machines. Left unresolved,
+    # that flips a borderline patient's hypercapnic classification between
+    # runs with zero data or code change (observed: +/-2 patients on a real
+    # run). Adding the value itself as a secondary sort key removes the
+    # input-order dependency, deterministically, on every run: verified
+    # empirically that pandas' `nearest` resolves an exact tie by taking the
+    # LAST candidate in ascending-sorted order, so among tied ph draws the
+    # larger of the tied values always wins (the pco2 side of a tie is not
+    # actually ambiguous -- merge_asof emits one output row per LEFT row, so
+    # each tied pco2 draw gets its own independent match regardless of sort
+    # order; the secondary pco2 key is kept anyway for symmetry/clarity).
+    # This is a reproducibility rule, not a clinical one -- there is no
+    # principled basis to prefer one of two simultaneous conflicting draws
+    # on clinical grounds, so the rule is applied mechanically rather than
+    # tuned toward over- or under-diagnosis.
     paired = pd.merge_asof(
-        pco2.sort_values("pco2_dttm"),
-        ph.sort_values("ph_dttm"),
+        pco2.sort_values(["pco2_dttm", "pco2"], kind="stable"),
+        ph.sort_values(["ph_dttm", "ph"], kind="stable"),
         left_on="pco2_dttm", right_on="ph_dttm",
         by="hospitalization_id", direction="nearest",
         tolerance=pd.Timedelta(minutes=tolerance_min),
