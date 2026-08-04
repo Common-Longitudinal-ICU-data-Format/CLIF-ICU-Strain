@@ -69,7 +69,11 @@ for month, grp in cohort.groupby("month"):
     })
 
 qc = pd.DataFrame(rows)
-# Scoped to the cohort's respiratory_support rows, not the whole site table.
-qc["device_null_rate_raw"] = 100.0 * resp["device_category"].isna().mean()
+# Named "_cohort", not "_raw": this is the null rate over the cohort-filtered
+# respiratory_support scan (this driver's `filters` push-down), not the raw
+# site-wide table. A consortium consumer pooling this column across sites
+# would otherwise compare a cohort-conditional rate here against another
+# site's site-wide rate under the same column name.
+qc["device_null_rate_cohort"] = 100.0 * resp["device_category"].isna().mean()
 qc.to_csv(out_dir / "quality_checks.csv", index=False)
 print(qc.to_string(index=False))

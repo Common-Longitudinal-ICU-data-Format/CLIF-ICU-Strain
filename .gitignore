@@ -25,6 +25,9 @@ clif_*.fst
 output/intermediate_phi/*
 !output/intermediate_phi/README.md
 
+# clifpy's auto-generated run logs (can embed the site's local data path)
+output/logs/
+
 # Python specific gitignores
 __pycache__/
 *.pyc

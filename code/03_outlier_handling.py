@@ -52,27 +52,52 @@ co.initialize(
     },
 )
 
+# Defined here (not down near labs_out/vitals_out) because it's also needed
+# to compute the arterial/spo2-scoped before/after stats below.
+arterial = {d.ABG_PO2, d.ABG_PCO2, d.ABG_PH}
+
+
+def _notna_count(df, value_col, category_col=None, category=None):
+    if category_col is not None:
+        df = df[df[category_col].isin(category) if isinstance(category, set) else df[category_col] == category]
+    return df[value_col].notna().sum()
+
+
 before = {
-    "labs": co.labs.df["lab_value_numeric"].notna().sum(),
-    "vitals": co.vitals.df["vital_value"].notna().sum(),
-    "respiratory_support": co.respiratory_support.df["fio2_set"].notna().sum(),
+    "labs": _notna_count(co.labs.df, "lab_value_numeric"),
+    "vitals": _notna_count(co.vitals.df, "vital_value"),
+    "respiratory_support": _notna_count(co.respiratory_support.df, "fio2_set"),
+    "labs_arterial_only": _notna_count(co.labs.df, "lab_value_numeric", "lab_category", arterial),
+    "vitals_spo2_only": _notna_count(co.vitals.df, "vital_value", "vital_category", d.SPO2_VITAL),
 }
 
 for tbl in (co.labs, co.vitals, co.respiratory_support):
     apply_outlier_handling(tbl)
 
 after = {
-    "labs": co.labs.df["lab_value_numeric"].notna().sum(),
-    "vitals": co.vitals.df["vital_value"].notna().sum(),
-    "respiratory_support": co.respiratory_support.df["fio2_set"].notna().sum(),
+    "labs": _notna_count(co.labs.df, "lab_value_numeric"),
+    "vitals": _notna_count(co.vitals.df, "vital_value"),
+    "respiratory_support": _notna_count(co.respiratory_support.df, "fio2_set"),
+    "labs_arterial_only": _notna_count(co.labs.df, "lab_value_numeric", "lab_category", arterial),
+    "vitals_spo2_only": _notna_count(co.vitals.df, "vital_value", "vital_category", d.SPO2_VITAL),
 }
 
-# NOTE: these counts are scoped to the cohort's hospitalizations (2024 index
-# ICU stays), not the full multi-year site table -- see module docstring.
+# Scope is explicit per row: the plain "labs"/"vitals" rows span every
+# category in the cohort-filtered table, not just the 3 arterial lab
+# categories and 1 spo2 vital category that actually survive into
+# labs_clean.parquet/vitals_clean.parquet and reach the ARF criteria -- e.g.
+# "338 nullified out of 3.17M labs" alone says nothing about how many
+# ARTERIAL values were removed. The *_only rows answer that directly.
+_SCOPE = {
+    "labs": "cohort hospitalization_ids, ALL lab categories (not just the 3 arterial categories used downstream)",
+    "vitals": "cohort hospitalization_ids, ALL vital categories (not just spo2, the only one used downstream)",
+    "respiratory_support": "cohort hospitalization_ids, not the full multi-year site table",
+    "labs_arterial_only": "cohort hospitalization_ids, restricted to po2_arterial/pco2_arterial/ph_arterial -- exactly what labs_clean.parquet contains",
+    "vitals_spo2_only": "cohort hospitalization_ids, restricted to spo2 -- exactly what vitals_clean.parquet contains",
+}
 pd.DataFrame([
     {"table": k, "values_before": before[k], "values_after": after[k],
-     "values_removed": before[k] - after[k],
-     "scope": "cohort hospitalization_ids only, not the full site table"}
+     "values_removed": before[k] - after[k], "scope": _SCOPE[k]}
     for k in before
 ]).to_csv(out_dir / "outlier_summary.csv", index=False)
 
@@ -85,7 +110,6 @@ waterfall.to_parquet(phi_dir / "resp_support_waterfall.parquet", index=False)
 
 # Only the categories the analysis reads: arterial gases for labs, spo2 for
 # vitals. Carrying the rest into the intermediate parquets is pure cost.
-arterial = {d.ABG_PO2, d.ABG_PCO2, d.ABG_PH}
 labs_out = co.labs.df[co.labs.df["lab_category"].isin(arterial)]
 vitals_out = co.vitals.df[co.vitals.df["vital_category"] == d.SPO2_VITAL]
 labs_out.to_parquet(phi_dir / "labs_clean.parquet", index=False)

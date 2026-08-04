@@ -22,9 +22,25 @@ _DEVICE_CATEGORY_CASE = {
 
 
 def restore_device_category_case(waterfall: pd.DataFrame) -> pd.DataFrame:
-    """Undo process_resp_support_waterfall's unconditional device_category lower-casing."""
+    """Undo process_resp_support_waterfall's unconditional device_category lower-casing.
+
+    Falls back to the original (lower-cased) value for anything outside the
+    known CLIF 2.1 vocabulary, rather than dropping it to NaN. `.map()` alone
+    returns NaN for an unmapped key, which would silently zero out every
+    downstream exact-match comparison for that value -- the exact failure
+    this function exists to prevent, just moved one level down (a CLIF 3.0
+    site's "hfnc"/"t_piece" vocabulary, unmapped here, would otherwise vanish
+    to NaN entirely instead of merely failing to match IMV/Room Air).
+    Preserving the original string keeps the signal inspectable for
+    debugging. Raising was rejected: aborting a multi-million-row batch
+    pipeline over one stray/unrecognized value is worse than continuing with
+    an honestly-unmapped-but-visible value; a future CLIF-version-aware
+    vocabulary map is a separate concern from this function's one job
+    (restore CLIF 2.1 casing for CLIF 2.1 values).
+    """
     out = waterfall.copy()
-    out["device_category"] = out["device_category"].str.lower().map(_DEVICE_CATEGORY_CASE)
+    lowered = out["device_category"].str.lower()
+    out["device_category"] = lowered.map(_DEVICE_CATEGORY_CASE).fillna(out["device_category"])
     return out
 
 
@@ -103,13 +119,42 @@ def attach_abg_availability(obs: pd.DataFrame, labs: pd.DataFrame, cohort: pd.Da
 
 
 def first_imv_starts(cohort: pd.DataFrame, resp: pd.DataFrame) -> pd.DataFrame:
-    """Earliest IMV observation inside each hospitalization's index ICU stay."""
-    df = resp[resp["device_category"] == d.IMV_DEVICE].merge(
+    """Earliest within-stay IMV state, split into 'any' vs genuinely 'new'.
+
+    process_resp_support_waterfall forward-fills device_category, so a
+    patient already intubated in the ED/OR before ICU admission shows up as
+    IMV starting at their very first in-stay respiratory-support row -- that
+    is a carried-over state, not a new intubation. Deliverable 1 is read as
+    an incidence rate, so the two must not be conflated into one column.
+
+    imv_any_start_dttm: earliest in-stay row with device_category == IMV,
+    regardless of what preceded it. Includes patients already ventilated on
+    arrival.
+    imv_new_start_dttm: earliest in-stay row with device_category == IMV
+    whose immediately preceding in-stay row was NOT IMV -- a genuine
+    transition. NaT when the patient's very first in-stay row is already
+    IMV: there is no preceding in-stay row to compare against, so "new" is
+    undetermined and conservatively excluded (they still count in
+    imv_any_start_dttm).
+    """
+    df = resp.merge(
         cohort[["hospitalization_id", "icu_admit_dttm", "icu_discharge_dttm"]],
         on="hospitalization_id", how="inner",
     )
     inside = (df["recorded_dttm"] >= df["icu_admit_dttm"]) & (df["recorded_dttm"] <= df["icu_discharge_dttm"])
-    return (
-        df[inside].groupby("hospitalization_id", as_index=False)["recorded_dttm"]
-        .min().rename(columns={"recorded_dttm": "imv_start_dttm"})
+    df = df[inside].sort_values(["hospitalization_id", "recorded_dttm"])
+    df["prev_device_category"] = df.groupby("hospitalization_id")["device_category"].shift()
+
+    imv = df[df["device_category"] == d.IMV_DEVICE]
+    any_start = (
+        imv.groupby("hospitalization_id", as_index=False)["recorded_dttm"]
+        .min().rename(columns={"recorded_dttm": "imv_any_start_dttm"})
     )
+
+    is_new_intubation = imv["prev_device_category"].notna() & (imv["prev_device_category"] != d.IMV_DEVICE)
+    new_start = (
+        imv[is_new_intubation].groupby("hospitalization_id", as_index=False)["recorded_dttm"]
+        .min().rename(columns={"recorded_dttm": "imv_new_start_dttm"})
+    )
+
+    return any_start.merge(new_start, on="hospitalization_id", how="left")

@@ -23,6 +23,36 @@ def suppress_small_cells(df: pd.DataFrame, count_cols: list, min_n: int = d.MIN_
     return out
 
 
+def suppress_small_rows(
+    df: pd.DataFrame, n_col: str, value_cols: list, min_n: int = d.MIN_CELL_SIZE
+) -> pd.DataFrame:
+    """Mask an entire row (n plus every value column) when 0 < n < min_n.
+
+    Unlike suppress_small_cells (which masks each count column
+    independently, cell by cell), this is for one-row-per-group summary
+    tables where a small n makes every other statistic on that row
+    identifying too -- publishing a median/quartile time-to-ICU for a
+    subtype with n=3 leaks more than n alone would, so the whole row goes
+    dark together, not just the count.
+
+    Exact n=0 rows are left alone (nothing to disclose), matching
+    suppress_small_cells' zero-is-safe convention.
+
+    Applies the same per-column dtype discipline as suppress_small_cells:
+    integer columns are cast to nullable "Int64" before masking, so integer
+    semantics survive both the NA mask and CSV serialization even when the
+    mask matches zero rows (a plain `.loc[mask, cols] = pd.NA` silently
+    upcasts int64 -> float64 unconditionally, so a published n of 40 would
+    round-trip as "40.0" even when nothing was actually suppressed).
+    """
+    out = df.copy()
+    mask = (out[n_col] > 0) & (out[n_col] < min_n)
+    for c in [n_col, *value_cols]:
+        col = out[c].astype("Int64") if pd.api.types.is_integer_dtype(out[c]) else out[c]
+        out[c] = col.mask(mask, pd.NA)
+    return out
+
+
 def monthly_imv_counts(imv_starts: pd.DataFrame) -> pd.DataFrame:
     """Count hospitalizations by month of first IMV initiation.
 
