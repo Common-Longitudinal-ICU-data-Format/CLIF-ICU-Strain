@@ -33,3 +33,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+
+.claude/
+.vscode/
+.superpowers/
+tests/
+output/
+references/
+docs/
