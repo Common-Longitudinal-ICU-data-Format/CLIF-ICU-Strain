@@ -39,6 +39,7 @@ TABLES = {  # table: (time column, other columns clifpy 0.5.0 reads, row filter)
 }
 
 windows = (pl.read_parquet(phi / "patient_days.parquet", columns=["hospitalization_id", "day_start"]).unique()
+           .with_columns(pl.col("day_start").dt.cast_time_unit("us"))  # events are standardised to microseconds; a site's parquet may be ns
            .sort("hospitalization_id", "day_start")
            .with_columns(window_id=pl.int_range(pl.len()).cast(pl.Utf8), end="day_start",
                          start=pl.col("day_start").dt.offset_by("-1d")))  # previous 7am wall-clock: windows never overlap across DST
