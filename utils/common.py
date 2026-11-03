@@ -1,0 +1,94 @@
+"""Constants, config, per-site output paths, and small-cell suppression used by every script.
+
+Every tunable analysis choice lives here so a reviewer finds them in one place.
+"""
+
+import json
+import os
+from pathlib import Path
+
+import pandas as pd
+
+# --- Cohort -------------------------------------------------------------------
+MIN_AGE = 18
+STUDY_START = "2018-01-01"           # ICU admissions in [start, end); the census burn-in trims the first weeks
+STUDY_END = "2025-01-01"
+
+# --- Census and strain ------------------------------------------------------------
+ICU_LOCATION = "icu"
+ICU_BLOCK_GAP_HOURS = 1              # ADT rows closer than this are one stay (ICU stay, or bed move within a unit)
+TRANSPARENT_LOCATIONS = {"procedural", "radiology", "dialysis"}   # the ICU bed is held while the patient is there (D5)
+ROUND_TRIP_HOURS = 12                # back in the same unit within this via transparent locations only: same stay (D5)
+DAY_START_HOUR = 7                   # 7am-to-7am strain day (typical rounding time)
+CENSUS_BURN_IN_DAYS = 60             # census undercounts until stays begun before the extract have left
+COVID_SURGE = ("2020-03-01", "2022-03-01")   # [start, end); for Corbett's capacity variant and the covariate
+MIN_UNIT_BEDS = int(os.environ.get("CLIF_MIN_UNIT_BEDS", 4))  # D6: smaller unit-years get no capacity; env lets the demo run
+MAX_UNIT_BEDS, MAX_UNITS = 60, 30    # above these, location_name is probably a floor, not a unit
+MIN_END_CENSUS_PCT = 85              # last 60 days' census vs the 60 before; lower suggests a discharged-only extract
+HOSPITAL = ["hospital_id"]
+UNIT = ["hospital_id", "location_name"]
+
+# --- Covariates and models ------------------------------------------------------------
+COVID_ICD10_PREFIX = "U071"          # U07.1, matched after stripping dots
+ICU_DAY_CAP = 7                      # later ICU days are sparse; pool them
+SPLINE_DF = 4
+OCCUPANCY_CENTER = 0.9               # interaction model: admissions effect when the unit is 90% full at the landmark
+EXPOSURE_HOURS = 24                  # landmark s: exposure window [s, s+24h); follow-up starts when it ends
+OUTCOME_DAYS = 7                     # HDHD-7: in-hospital death or hospice discharge in [s+24h, s+8d)
+OUTCOME_DAYS_LONG = 30               # HDHD-30, a key secondary
+PLACEBO_OFFSET_DAYS = 8              # placebos: admissions in [s+8d, s+9d) (after the outcome window) and [s-8d, s-7d)
+MIN_POA_SHARE = 0.2                  # use present-on-admission codes only if at least this share of codes is flagged POA
+
+# --- Disclosure ---------------------------------------------------------------------
+MIN_CELL_SIZE = 11                   # suppress any shared count below this
+
+
+def load_config() -> dict:
+    """config/config.json, or the file named by CLIF_CONFIG_PATH (the demo test uses this)."""
+    return json.loads(Path(os.environ.get("CLIF_CONFIG_PATH", "config/config.json")).read_text())
+
+
+def study_window() -> tuple:
+    """(start, end) for ICU admissions; env override lets the date-shifted demo data run."""
+    return os.environ.get("CLIF_STUDY_START", STUDY_START), os.environ.get("CLIF_STUDY_END", STUDY_END)
+
+
+def output_root() -> Path:
+    return Path(os.environ.get("CLIF_OUTPUT_ROOT", "output"))
+
+
+def phi_dir(site: str) -> Path:
+    """Row-level, PHI-bearing intermediates for one site. Never shared."""
+    path = output_root() / "intermediate_phi" / site
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def final_dir(site: str) -> Path:
+    """Disclosure-controlled aggregates: the folder a site uploads to Box."""
+    path = output_root() / "final_no_phi" / f"{site}_upload_to_box"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def suppress_small_cells(df: pd.DataFrame, count_cols: list, min_n: int = MIN_CELL_SIZE) -> pd.DataFrame:
+    """Mask counts in (0, min_n) as NA. Exact zeros are safe to publish.
+
+    Integer columns go to nullable "Int64" first so a published 40 stays "40"
+    in the CSV rather than "40.0"; float columns are masked as they are.
+    """
+    out = df.copy()
+    for c in count_cols:
+        col = out[c].astype("Int64") if pd.api.types.is_integer_dtype(out[c]) else out[c]
+        out[c] = col.mask((col > 0) & (col < min_n), pd.NA)
+    return out
+
+
+def suppress_small_rows(df: pd.DataFrame, n_col: str, value_cols: list, min_n: int = MIN_CELL_SIZE) -> pd.DataFrame:
+    """Mask n and every value column on rows where 0 < n < min_n (a median next to n=3 leaks)."""
+    out = df.copy()
+    small = (out[n_col] > 0) & (out[n_col] < min_n)
+    for c in [n_col, *value_cols]:
+        col = out[c].astype("Int64") if pd.api.types.is_integer_dtype(out[c]) else out[c]
+        out[c] = col.mask(small, pd.NA)
+    return out

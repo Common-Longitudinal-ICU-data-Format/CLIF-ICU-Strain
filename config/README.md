@@ -13,6 +13,8 @@
    - `output_directory` — where clifpy writes logs and validation results (e.g. `"./output"`).
 
 This file uses the **clifpy config schema**. The scripts in `code/` read it directly; set
-`CLIF_CONFIG_PATH` to point them at a different file (the demo test does this).
+`CLIF_CONFIG_PATH` to point them at a different file. `run_pipeline.py` does this for you: keep
+several sites as `config_<site>.json` (also git-ignored) and run
+`uv run python run_pipeline.py config/config_<site>.json`.
 
 Note: the `.gitignore` in this directory keeps `config.json` out of the remote repository.
