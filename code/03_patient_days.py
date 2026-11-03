@@ -55,12 +55,12 @@ except Exception as e:
     print(f"code_status not loaded ({type(e).__name__}): new_limitation_48h will be NA")
     code_status = None
 days = add_outcomes(days, hosp, patient, blocks, code_status)
-days = days[days["eligible"]]
-steps.append(("no death or hospice discharge inside the exposure window", days))
 last = hosp_daily["day_start"].max()
-days = days[days["day_start"] + pd.Timedelta(days=c.OUTCOME_DAYS + 1) <= last].copy()  # outcome window inside the data
+# Every incumbent stays in the table (the unit's workload at s counts them all); model rows are flagged, not dropped
+days["in_window"] = days["day_start"] + pd.Timedelta(days=c.OUTCOME_DAYS + 1) <= last  # outcome window inside the data
 days.loc[days["day_start"] + pd.Timedelta(days=c.OUTCOME_DAYS_LONG + 1) > last, "hdhd_30d"] = np.nan
-steps.append(("outcome window inside the data", days))
+steps.append(("no death or hospice discharge inside the exposure window", days[days["eligible"]]))
+steps.append(("outcome window inside the data", days[days["eligible"] & days["in_window"]]))
 
 dx_cols = ["hospitalization_id", "diagnosis_code", "diagnosis_code_format"]
 ids = cohort["hospitalization_id"].unique().tolist()
@@ -89,7 +89,8 @@ days["year"], days["month"], days["dow"] = local.dt.year, local.dt.month, local.
 days["icu_day_cap"] = days["icu_day"].clip(upper=c.ICU_DAY_CAP)
 days.to_parquet(phi / "patient_days.parquet", index=False)
 
-death, hdhd, any_ = (days[k].astype(bool) for k in ["death_7d", "hdhd_7d", "death_any_7d"])
+model_rows = days[days["eligible"] & days["in_window"]]
+death, hdhd, any_ = (model_rows[k].astype(bool) for k in ["death_7d", "hdhd_7d", "death_any_7d"])
 attrition = pd.DataFrame([{"step": s, "icu_stays": d["stay_id"].nunique(), "patients": d["patient_id"].nunique(),
                            "landmarks": len(d) if "day_start" in d else pd.NA} for s, d in steps])
 attrition = pd.concat([attrition, pd.DataFrame([
@@ -98,11 +99,12 @@ attrition = pd.concat([attrition, pd.DataFrame([
     {"step": "  hospice discharge without in-hospital death", "landmarks": int((hdhd & ~death).sum())},
     {"step": "landmarks with a linked death (patient.death_dttm) but no in-hospital death in the window",
      "landmarks": int((any_ & ~death).sum())},
-    {"step": "landmarks with ICU discharge inside the exposure window", "landmarks": int(days["icu_discharge_24h"].sum())},
-    {"step": "  readmitted to an ICU within 72h of that discharge", "landmarks": int(days["readmit_72h"].sum())},
-    {"step": "  discharged between 18:00 and 06:00", "landmarks": int(days["after_hours_discharge"].sum())},
-    {"step": "landmarks with no limitation order before s", "landmarks": int(days["new_limitation_48h"].notna().sum())},
-    {"step": "  with a new limitation order within 48h", "landmarks": int(days["new_limitation_48h"].sum())},
+    {"step": "landmarks with ICU discharge inside the exposure window", "landmarks": int(model_rows["icu_discharge_24h"].sum())},
+    {"step": "  readmitted to an ICU within 72h of that discharge", "landmarks": int(model_rows["readmit_72h"].sum())},
+    {"step": "  discharged between 18:00 and 06:00", "landmarks": int(model_rows["after_hours_discharge"].sum())},
+    {"step": "landmarks full code at s (last order before s is not a limitation)",
+     "landmarks": int(model_rows["new_limitation_48h"].notna().sum())},
+    {"step": "  with a new limitation order within 48h", "landmarks": int(model_rows["new_limitation_48h"].sum())},
     {"step": f"Charlson and COVID from {codes_note}"},  # so the coordinating site can see each site's covariate source
 ])]).astype({"icu_stays": "Int64", "patients": "Int64", "landmarks": "Int64"})
 c.suppress_small_cells(attrition, ["icu_stays", "patients", "landmarks"]).to_csv(final / "attrition.csv", index=False)
