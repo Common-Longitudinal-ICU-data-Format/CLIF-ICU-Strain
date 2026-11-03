@@ -39,6 +39,15 @@ OUTCOME_DAYS_LONG = 30               # HDHD-30, a key secondary
 PLACEBO_OFFSET_DAYS = 8              # placebos: admissions in [s+8d, s+9d) (after the outcome window) and [s-8d, s-7d)
 MIN_POA_SHARE = 0.2                  # use present-on-admission codes only if at least this share of codes is flagged POA
 
+# --- v4: occupancy, demand-side exposure, process outcomes ------------------------------
+OCCUPANCY_TIPPING = 0.925            # Kuntz 2015: the mortality slope turns positive above this share of capacity
+ED_LOCATION = "ed"                   # ADT rows whose arrivals are demand that bed-freeing cannot cause
+READMIT_HOURS = 72                   # ICU readmission after an ICU discharge inside the exposure window
+LIMITATION_HOURS = 48                # new DNR/DNI (or any other limitation) order within this of the landmark
+AFTER_HOURS = (18, 6)                # ICU discharge from 18:00 to 06:00 local
+NON_LIMITATION_CODES = {"full", "other"}   # any other code_status_category is a limitation (dnr, dnar, dnr/dni, udnr)
+MIN_GATE_EVENTS = 11                 # a unit-year needs this many discharges to be gated (A1)
+
 # --- Disclosure ---------------------------------------------------------------------
 MIN_CELL_SIZE = 11                   # suppress any shared count below this
 

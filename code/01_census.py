@@ -54,7 +54,14 @@ for level, (by, admits) in levels.items():
     daily = daily[daily["day_start"] <= data_end]
     caps = capacities(census, daily, by=by, min_beds=c.MIN_UNIT_BEDS if level == "unit" else 1)  # D6 is a unit rule
     caps = caps.merge(hours_above_capacity(census, caps, by=by), on=by + ["year"], how="left")
-    daily = dailies[level] = add_normalized(daily, caps, by=by)
+    daily = add_normalized(daily, caps, by=by)
+    if level == "hospital":  # ED arrivals per 24h: demand that bed-freeing cannot cause (v4 instrument)
+        ed = adt.loc[adt["location_category"].str.lower().eq(c.ED_LOCATION), by + ["in_dttm"]].dropna()
+        ed_daily = (daily_strain(census, ed, by=by)[by + ["day_start", "admits_24h"]]
+                    .rename(columns={"admits_24h": "ed_arrivals_24h"}))
+        daily = daily.merge(ed_daily, on=by + ["day_start"], how="left")
+        daily["ed_strain"] = daily["ed_arrivals_24h"] / daily["capacity_p99"]
+    dailies[level] = daily
     census.to_parquet(phi / f"census_by_{level}.parquet", index=False)
     daily.to_parquet(phi / f"daily_by_{level}.parquet", index=False)
 

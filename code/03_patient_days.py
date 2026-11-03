@@ -1,10 +1,10 @@
-"""Step 3: landmark rows (design v3, E2). Run after 01.
+"""Step 3: landmark rows (design v3, E2; v4 adds demand-side exposures and process outcomes). Run after 01.
 
 One row per ICU stay per local 7am s the patient is already in a unit at: that unit's admissions by
 other patients over [s, s+24h) as a share of capacity (exposure), in-hospital death or hospice
 discharge over [s+24h, s+8d) (outcome), and covariates measured at or before s.
 
-Reads hospitalization, patient, hospital_diagnosis, and step 1's intermediates. Writes
+Reads hospitalization, patient, hospital_diagnosis, code_status, and step 1's intermediates. Writes
   intermediate_phi/<site>/patient_days.parquet
   <site>_upload_to_box/attrition.csv
 """
@@ -34,9 +34,10 @@ co.initialize(tables=["hospitalization", "patient"], columns={
 })
 hosp, patient = co.hospitalization.df, co.patient.df
 stays = pd.read_parquet(phi / "unit_stays.parquet")
+blocks = pd.read_parquet(phi / "icu_blocks.parquet")
 hosp_daily, unit_daily = pd.read_parquet(phi / "daily_by_hospital.parquet"), pd.read_parquet(phi / "daily_by_unit.parquet")
 
-cohort = icu_cohort(hosp, pd.read_parquet(phi / "icu_blocks.parquet"), start, end)
+cohort = icu_cohort(hosp, blocks, start, end)
 steps = [("adult ICU stays in study window", cohort)]
 days = expand_patient_days(cohort, hosp_daily)
 steps.append(("with a 7am after census burn-in", days))
@@ -45,7 +46,15 @@ days = days[days["incumbent"]]  # in the unit before 7am s; the arrival day (aft
 steps.append(("landmarks: in the unit before 7am s", days))
 days = add_exposure(days, stays, unit_daily, hosp_daily).dropna(subset=["admit_strain"])  # no capacity (D6) or no next day
 steps.append(("with unit admissions over [s, s+24h) and capacity", days))
-days = add_outcomes(days, hosp, patient)
+
+try:  # v4 process outcome: new limitation orders; a site without the table gets NA
+    co.load_table("code_status", columns=["patient_id", "start_dttm", "code_status_category"],
+                  filters={"patient_id": cohort["patient_id"].unique().tolist()})
+    code_status = co.code_status.df
+except Exception as e:
+    print(f"code_status not loaded ({type(e).__name__}): new_limitation_48h will be NA")
+    code_status = None
+days = add_outcomes(days, hosp, patient, blocks, code_status)
 days = days[days["eligible"]]
 steps.append(("no death or hospice discharge inside the exposure window", days))
 last = hosp_daily["day_start"].max()
@@ -90,6 +99,10 @@ attrition = pd.concat([attrition, pd.DataFrame([
     {"step": "landmarks with a linked death (patient.death_dttm) but no in-hospital death in the window",
      "landmarks": int((any_ & ~death).sum())},
     {"step": "landmarks with ICU discharge inside the exposure window", "landmarks": int(days["icu_discharge_24h"].sum())},
+    {"step": "  readmitted to an ICU within 72h of that discharge", "landmarks": int(days["readmit_72h"].sum())},
+    {"step": "  discharged between 18:00 and 06:00", "landmarks": int(days["after_hours_discharge"].sum())},
+    {"step": "landmarks with no limitation order before s", "landmarks": int(days["new_limitation_48h"].notna().sum())},
+    {"step": "  with a new limitation order within 48h", "landmarks": int(days["new_limitation_48h"].sum())},
     {"step": f"Charlson and COVID from {codes_note}"},  # so the coordinating site can see each site's covariate source
 ])]).astype({"icu_stays": "Int64", "patients": "Int64", "landmarks": "Int64"})
 c.suppress_small_cells(attrition, ["icu_stays", "patients", "landmarks"]).to_csv(final / "attrition.csv", index=False)
