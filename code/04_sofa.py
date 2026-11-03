@@ -40,7 +40,8 @@ TABLES = {  # table: (time column, other columns clifpy 0.5.0 reads, row filter)
 
 windows = (pl.read_parquet(phi / "patient_days.parquet", columns=["hospitalization_id", "day_start"]).unique()
            .sort("hospitalization_id", "day_start")
-           .with_columns(window_id=pl.int_range(pl.len()).cast(pl.Utf8), start=pl.col("day_start") - pl.duration(hours=24), end="day_start"))
+           .with_columns(window_id=pl.int_range(pl.len()).cast(pl.Utf8), end="day_start",
+                         start=pl.col("day_start").dt.offset_by("-1d")))  # previous 7am wall-clock: windows never overlap across DST
 if windows.is_empty():  # clifpy fails on an empty cohort (e.g. the demo, whose units have no capacity)
     pd.DataFrame(columns=OUT_COLS).to_parquet(phi / "sofa_landmark.parquet", index=False)
     print("no patient-days; wrote an empty sofa_landmark.parquet")

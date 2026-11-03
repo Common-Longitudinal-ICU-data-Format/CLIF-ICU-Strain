@@ -46,6 +46,8 @@ days["obligate"] = days["on_imv"].astype(bool) | days["on_pressor"].astype(bool)
 support = days["obligate"].astype(int)
 days["wocc_strain"] = (support.groupby([days["unit"], days["day_start"]]).transform("sum") - support) / days["capacity_p99"]
 days["wocc10"] = days["wocc_strain"] * 10
+if "in_window" in days:  # unit workload above counted every incumbent; the models use the eligible rows only
+    days = days[days["eligible"] & days["in_window"]].copy()
 for col in ["ed_strain", "prior_ed_strain", "placebo_ed_strain"]:  # v4 A3: hospital ED arrivals / hospital ICU capacity
     if col not in days:
         days[col] = np.nan
@@ -71,6 +73,8 @@ MODELS = [
     ("admissions_x_occupancy", "hdhd_7d", "admit_strain", ["per10:occ_c10"], {}),
     ("obligate_icu", "hdhd_7d", "admit_strain", [], {"rows": "obligate"}),
     ("hdhd_30d", "hdhd_30d", "admit_strain", [], {}),
+    ("next_day_death_or_hospice", "hdhd_48h", "admit_strain", [], {}),       # Corbett: death in the next 24h
+    ("hospital_death_or_hospice", "hdhd_hosp", "admit_strain", [], {}),      # Corbett: whole-hospitalization outcome
     ("in_hospital_death_only", "death_7d", "admit_strain", [], {}),
     ("any_source_death", "death_any_7d", "admit_strain", [], {}),
     ("capacity_max", "hdhd_7d", "admit_strain_max", [], {}),
@@ -109,9 +113,10 @@ def gate_unit_years() -> pd.DataFrame:
             continue
         try:
             r = fit_logit(d.assign(per10=d["admit_strain"] * 10), "icu_discharge_24h", ["per10", "C(month)", "C(dow)"], ["patient_id"])
+            ok = bool(r.mle_retvals["converged"] and np.isfinite(r.bse["per10"]))
             lo, hi = r.params["per10"] - 1.96 * r.bse["per10"], r.params["per10"] + 1.96 * r.bse["per10"]
-            rows.append({**row, "status": "fit", "odds_ratio": np.exp(r.params["per10"]), "ci_low": np.exp(lo),
-                         "ci_high": np.exp(hi), "validated": bool(lo > 0)})
+            rows.append({**row, "status": "fit" if ok else "no_se", "odds_ratio": np.exp(r.params["per10"]),
+                         "ci_low": np.exp(lo), "ci_high": np.exp(hi), "validated": bool(ok and lo > 0)})
         except Exception as e:
             rows.append({**row, "status": f"failed: {type(e).__name__}"})
     gate = pd.DataFrame(rows, columns=["site", "unit_year", "n_landmarks", "n_discharges", "status", "odds_ratio",

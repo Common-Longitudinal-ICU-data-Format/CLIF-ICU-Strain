@@ -195,7 +195,8 @@ def add_normalized(daily: pd.DataFrame, caps: pd.DataFrame, by=HOSPITAL) -> pd.D
 
 
 def hours_above_capacity(census: pd.DataFrame, caps: pd.DataFrame, by=HOSPITAL) -> pd.DataFrame:
-    """Hours each group-year spent above its p99 capacity (e.g. bed-turnover overlap in a full unit)."""
+    """Hours each group-year spent above its p99 capacity (e.g. bed-turnover overlap in a full unit).
+    An interval that crosses New Year counts in the year it starts (at most one hour per group-year)."""
     by = list(by)
     c = census.assign(year=census["time"].dt.year).merge(caps[by + ["year", "capacity_p99"]], on=by + ["year"], how="left")
     hours = (c.groupby(by)["time"].shift(-1) - c["time"]).dt.total_seconds() / 3600
