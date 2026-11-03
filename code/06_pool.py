@@ -20,7 +20,7 @@ from utils import common as c
 from utils import figures
 from utils.models import e_value, random_effects
 
-TERMS = ["per10", "placebo10", "placebo_past10", "per10:occ_c10"]
+TERMS = ["per10", "placebo10", "placebo_past10", "placebo_ed10", "per10:occ_c10", "occ_hinge10", "wocc10", "per10:wocc10"]
 
 src = Path(os.environ.get("CLIF_POOL_DIR", c.output_root() / "final_no_phi"))
 out = c.output_root() / "final_no_phi" / "pooled"

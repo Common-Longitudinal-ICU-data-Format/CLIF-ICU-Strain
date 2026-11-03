@@ -1,4 +1,4 @@
-"""Landmark rows for the outcome model (design v3, E2: incumbents).
+"""Landmark rows for the outcome model (design v3, E2: incumbents; v4 adds demand-side exposures and process outcomes).
 
 One row per ICU stay per local 7am s at which the patient is already in a unit. The exposure is
 that unit's admissions by other patients over [s, s+24h) as a share of its capacity; the outcome
@@ -9,7 +9,8 @@ before s.
 import numpy as np
 import pandas as pd
 
-from .common import COVID_ICD10_PREFIX, EXPOSURE_HOURS, MIN_AGE, OUTCOME_DAYS, OUTCOME_DAYS_LONG, PLACEBO_OFFSET_DAYS, UNIT
+from .common import (AFTER_HOURS, COVID_ICD10_PREFIX, EXPOSURE_HOURS, LIMITATION_HOURS, MIN_AGE, NON_LIMITATION_CODES,
+                     OUTCOME_DAYS, OUTCOME_DAYS_LONG, PLACEBO_OFFSET_DAYS, READMIT_HOURS, UNIT)
 
 EXPOSURE = pd.Timedelta(hours=EXPOSURE_HOURS)
 
@@ -101,6 +102,8 @@ def add_exposure(days: pd.DataFrame, stays: pd.DataFrame, unit_daily: pd.DataFra
     prior_admit_strain: admissions over [s-24h, s) (unit state at s); census_strain: occupancy
     at s; hosp_admit_strain, hosp_census_strain: hospital-wide over [s, s+24h) and at s
     (shortcut: the patient's own admission is not removed from the hospital count, 1 in ~20/day).
+    v4: ed_strain, prior_ed_strain, placebo_ed_strain: hospital ED arrivals over [s, s+24h),
+    [s-24h, s) and [s+8d, s+9d) / hospital ICU capacity (demand the ICU's bed-freeing cannot cause).
     """
     days = days.reset_index(drop=True)
     u = unit_daily.assign(hospital_id=unit_daily["hospital_id"].astype(days["hospital_id"].dtype))
@@ -120,9 +123,15 @@ def add_exposure(days: pd.DataFrame, stays: pd.DataFrame, unit_daily: pd.DataFra
     out["admit_strain_max"] = out["admits"] / out["capacity_max"]
     out = out.merge(h[["hospital_id", "day_start", "census_strain"]].rename(columns={"census_strain": "hosp_census_strain"}),
                     on=["hospital_id", "day_start"], how="left")
-    return out.merge(h[["hospital_id", "day_start", "admit_strain"]]
-                     .rename(columns={"day_start": "day_end", "admit_strain": "hosp_admit_strain"}),
-                     on=["hospital_id", "day_end"], how="left")
+    out = out.merge(h[["hospital_id", "day_start", "admit_strain"]]
+                    .rename(columns={"day_start": "day_end", "admit_strain": "hosp_admit_strain"}),
+                    on=["hospital_id", "day_end"], how="left")
+    if "ed_strain" in h:
+        ed = h[["hospital_id", "day_start", "ed_strain"]].rename(columns={"day_start": "_end"})
+        for name, end in [("ed_strain", out["day_end"]), ("prior_ed_strain", s),
+                          ("placebo_ed_strain", plus_days(s, PLACEBO_OFFSET_DAYS + 1))]:
+            out[name] = out[["hospital_id"]].assign(_end=end).merge(ed, on=["hospital_id", "_end"], how="left")["ed_strain"].to_numpy()
+    return out
 
 
 def _events(hosp: pd.DataFrame, kinds) -> pd.DataFrame:
@@ -131,16 +140,18 @@ def _events(hosp: pd.DataFrame, kinds) -> pd.DataFrame:
     return e.rename(columns={"discharge_dttm": "t"})
 
 
-def _next_event(days: pd.DataFrame, events: pd.DataFrame) -> pd.Series:
-    """Time of the patient's first event at or after each row's day_start (NaT when none)."""
+def _event_time(days: pd.DataFrame, events: pd.DataFrame, direction: str = "forward") -> pd.Series:
+    """Time of the patient's first event at or after (forward) or last event before (backward) each row's day_start."""
     d = days[["patient_id", "day_start"]].reset_index(names="_i").sort_values("day_start")
     e = events.dropna(subset=["t"])
     e = e.assign(t=e["t"].astype(d["day_start"].dtype), patient_id=e["patient_id"].astype(d["patient_id"].dtype)).sort_values("t")
-    m = pd.merge_asof(d, e, left_on="day_start", right_on="t", by="patient_id", direction="forward")
+    m = pd.merge_asof(d, e, left_on="day_start", right_on="t", by="patient_id", direction=direction,
+                      allow_exact_matches=direction == "forward")
     return m.set_index("_i")["t"].reindex(days.index)
 
 
-def add_outcomes(days: pd.DataFrame, hosp: pd.DataFrame, patient: pd.DataFrame) -> pd.DataFrame:
+def add_outcomes(days: pd.DataFrame, hosp: pd.DataFrame, patient: pd.DataFrame,
+                 blocks: pd.DataFrame | None = None, code_status: pd.DataFrame | None = None) -> pd.DataFrame:
     """Outcomes after the exposure window, from hospital records at the patient level (D2).
 
     An HDHD event is an in-hospital death (discharged Expired, at discharge_dttm) or a hospice
@@ -150,28 +161,54 @@ def add_outcomes(days: pd.DataFrame, hosp: pd.DataFrame, patient: pd.DataFrame) 
     `eligible` is False when an event falls inside the exposure window [s, s+24h).
     icu_discharge_24h and unit_exit_24h (left the ICU, or the unit, inside the exposure
     window) are the positive-control outcomes.
+    v4 process outcomes: among landmarks discharged from the ICU inside the window, readmit_72h
+    (a later ICU stay of the same hospitalization begins within 72 h of that discharge) and
+    after_hours_discharge (18:00-06:00); among landmarks with no limitation order before s,
+    new_limitation_48h (first DNR/DNI or other limitation order in [s, s+48h)). NA elsewhere.
     """
     if days.empty:
         return days.assign(eligible=True, hdhd_7d=0, hdhd_30d=0, death_7d=0, death_any_7d=0,
-                           icu_discharge_24h=0, unit_exit_24h=0)
+                           icu_discharge_24h=0, unit_exit_24h=0, readmit_72h=np.nan, after_hours_discharge=np.nan,
+                           new_limitation_48h=np.nan)
     expired, hospice = _events(hosp, ["expired"]), _events(hosp, ["hospice"])
     linked = patient[["patient_id", "death_dttm"]].rename(columns={"death_dttm": "t"})
     s = days["day_start"]
     fu = s + EXPOSURE
-    hdhd = _next_event(days, pd.concat([expired, hospice]))
-    dead = _next_event(days, expired)
-    any_ = _next_event(days, pd.concat([expired, linked]))
+    hdhd = _event_time(days, pd.concat([expired, hospice]))
+    dead = _event_time(days, expired)
+    any_ = _event_time(days, pd.concat([expired, linked]))
 
     def within(t, horizon):
         return ((t >= fu) & (t < s + pd.Timedelta(days=horizon + 1))).astype(int)
 
-    return days.assign(
+    discharged = days["icu_discharge_dttm"] < fu
+    out = days.assign(
         eligible=~(hdhd < fu),  # event-free when follow-up starts: a death inside the exposure window is not its effect
         hdhd_7d=within(hdhd, OUTCOME_DAYS), hdhd_30d=within(hdhd, OUTCOME_DAYS_LONG),
         death_7d=within(dead, OUTCOME_DAYS), death_any_7d=within(any_, OUTCOME_DAYS),
-        icu_discharge_24h=(days["icu_discharge_dttm"] < fu).astype(int),
+        icu_discharge_24h=discharged.astype(int),
         unit_exit_24h=(days["stay_out"] < fu).astype(int),
     )
+    hour = days["icu_discharge_dttm"].dt.hour
+    out["after_hours_discharge"] = ((hour >= AFTER_HOURS[0]) | (hour < AFTER_HOURS[1])).astype(float).where(discharged)
+    if blocks is not None:
+        b = blocks.sort_values(["hospitalization_id", "icu_admit_dttm"])
+        b = b.assign(_next=b.groupby("hospitalization_id")["icu_admit_dttm"].shift(-1))
+        nxt = days[["hospitalization_id", "block_index"]].merge(
+            b[["hospitalization_id", "block_index", "_next"]], on=["hospitalization_id", "block_index"], how="left")["_next"]
+        gap = nxt.to_numpy() - days["icu_discharge_dttm"].to_numpy()
+        out["readmit_72h"] = pd.Series(gap <= np.timedelta64(READMIT_HOURS, "h"), index=days.index).astype(float).where(discharged)
+    else:
+        out["readmit_72h"] = np.nan
+    if code_status is not None and len(code_status):
+        lim = code_status[~code_status["code_status_category"].astype(str).str.lower().isin(NON_LIMITATION_CODES)]
+        lim = lim[["patient_id", "start_dttm"]].rename(columns={"start_dttm": "t"})
+        prior, nxt = _event_time(days, lim, "backward"), _event_time(days, lim, "forward")
+        new = (nxt >= s) & (nxt < s + pd.Timedelta(hours=LIMITATION_HOURS))
+        out["new_limitation_48h"] = new.astype(float).where(prior.isna())  # NA once a limitation is already in place
+    else:
+        out["new_limitation_48h"] = np.nan
+    return out
 
 
 def covid_hospitalizations(dx: pd.DataFrame):
