@@ -11,7 +11,7 @@
    - `filetype` — `"csv"` or `"parquet"`.
    - `timezone` — your data's timezone, e.g. `"US/Eastern"` (required by clifpy).
    - `study_start`, `study_end` (optional) — the ICU admission window, for date-shifted data only; the
-     study's is 2019-01-01 to 2025-01-01 (`utils/common.py`). `config_mimic.json` sets MIMIC's 2105–2215.
+     study's is 2019-01-01 to 2025-01-01 (`utils/common.py`).
 
 Outputs always go to `output/` (or `CLIF_OUTPUT_ROOT`).
 
