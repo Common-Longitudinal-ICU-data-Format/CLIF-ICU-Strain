@@ -1,7 +1,9 @@
-"""Step 1: ICU stays, rolling census, daily 7am strain and capacity, per unit and per hospital.
+"""Step 1: encounters, ICU stays, rolling census, daily 7am strain and capacity, per unit and per hospital.
 
-Reads hospitalization and adt. Writes
-  intermediate_phi/<site>/  icu_blocks, unit_stays, census_by_{unit,hospital}, daily_by_{unit,hospital}
+Reads hospitalization and adt. Hospitalizations within STITCH_HOURS of each other are stitched into one
+encounter (clifpy), keyed by its first hospitalization_id; every later step uses the encounter. Writes
+  intermediate_phi/<site>/  encounters, encounter_map, icu_blocks, unit_stays, census_by_{unit,hospital},
+                            daily_by_{unit,hospital}
   <site>_upload_to_box/     capacity_by_{unit,hospital}.csv (one row per unit-year), monthly_strain_by_{unit,hospital}.csv,
                             census_qc.csv, monthly_admit_strain_by_unit.png
 """
@@ -18,6 +20,7 @@ from utils import common as c
 from utils import figures
 from utils.census import (add_normalized, capacities, collapse_icu_blocks, daily_strain, hours_above_capacity,
                           icu_intervals, is_icu, merge_round_trips, rolling_census, unit_stays)
+from utils.encounters import stitch
 
 config = c.load_config()
 site = config["site_name"]
@@ -25,31 +28,41 @@ phi, final = c.phi_dir(site), c.final_dir(site)
 
 co = ClifOrchestrator(data_directory=config["data_directory"], filetype=config["filetype"], timezone=config["timezone"])
 co.initialize(tables=["hospitalization", "adt"], columns={
-    "hospitalization": ["patient_id", "hospitalization_id", "admission_dttm", "age_at_admission"],
+    "hospitalization": ["patient_id", "hospitalization_id", "admission_dttm", "discharge_dttm", "age_at_admission",
+                        "admission_type_category", "discharge_category"],
     "adt": ["hospitalization_id", "hospital_id", "in_dttm", "out_dttm", "location_category", "location_type", "location_name"],
 })
 hosp, adt = co.hospitalization.df, co.adt.df
 assert adt["hospital_id"].notna().all(), "adt.hospital_id has nulls: a null key silently empties the census; fill it"
+# Extract cutoff: after the last hospital admission no one new arrives and the census only drains. Not the last
+# ICU admission: ward patients admitted before the cutoff keep moving to the ICU for weeks after it.
+data_end = hosp["admission_dttm"].max()
+n_hospitalizations = len(hosp)
+hosp, adt, encounter_map = stitch(hosp, adt)  # ED -> inpatient and inter-hospital transfers become one encounter
+hosp.to_parquet(phi / "encounters.parquet", index=False)
+encounter_map.to_parquet(phi / "encounter_map.parquet", index=False)
 icu_rows_raw = int(is_icu(adt).sum())
 adt = merge_round_trips(adt)  # OR / CT / dialysis trips: the bed is held, the return is not an admission (v3, D5)
 
 adult = hosp.loc[hosp["age_at_admission"] >= c.MIN_AGE, "hospitalization_id"]
-intervals = icu_intervals(adt, adult)
-stays = unit_stays(intervals)
+intervals = icu_intervals(adt, adult)  # hospital census: every ICU row, named or not
+unit_intervals = intervals.dropna(subset=["location_name"])
+unnamed_pct = 100 * (1 - len(unit_intervals) / max(len(intervals), 1))
+if unnamed_pct > c.MAX_UNNAMED_ICU_PCT:
+    print(f"WARNING: {unnamed_pct:.0f}% of adult ICU rows have no location_name: they count in the hospital census "
+          "but in no unit, and those patients are never landmarks. Fill location_name.")
+stays = unit_stays(unit_intervals)
 blocks = collapse_icu_blocks(adt)
 blocks = blocks[blocks["hospitalization_id"].isin(adult)]
-# Extract cutoff: after the last hospital admission no one new arrives and the census only drains. Not the last
-# ICU admission: ward patients admitted before the cutoff keep moving to the ICU for weeks after it.
-data_end = hosp["admission_dttm"].max()
 stays.to_parquet(phi / "unit_stays.parquet", index=False)
 blocks.to_parquet(phi / "icu_blocks.parquet", index=False)
 
 unit_types = stays[c.UNIT + ["location_type"]].drop_duplicates(c.UNIT)
-levels = {"hospital": (c.HOSPITAL, blocks.rename(columns={"icu_admit_dttm": "in_dttm"})),
-          "unit": (c.UNIT, stays)}  # hospital admissions = new ICU stays; unit admissions include ICU-to-ICU transfers
+levels = {"hospital": (c.HOSPITAL, intervals, blocks.rename(columns={"icu_admit_dttm": "in_dttm"})),
+          "unit": (c.UNIT, unit_intervals, stays)}  # hospital admissions = new ICU stays; unit admissions include ICU-to-ICU transfers
 dailies = {}
-for level, (by, admits) in levels.items():
-    census = rolling_census(intervals, by=by)
+for level, (by, level_intervals, admits) in levels.items():
+    census = rolling_census(level_intervals, by=by)
     daily = daily_strain(census, admits, by=by)
     daily = daily[daily["day_start"] <= data_end]
     caps = capacities(census, daily, by=by, min_beds=c.MIN_UNIT_BEDS if level == "unit" else 1)  # D6 is a unit rule
@@ -86,9 +99,11 @@ figures.monthly_strain(monthly, "mean_admit_strain", "ICU admissions per day / c
     final / "monthly_admit_strain_by_unit.png", dpi=150)
 
 icu = is_icu(adt)
-qc = pd.DataFrame({"check": ["icu_adt_rows", "icu_rows_folded_into_round_trips", "icu_adt_rows_missing_time_or_unit",
+qc = pd.DataFrame({"check": ["hospitalizations", "encounters_after_stitching", "hospitalizations_in_stitched_encounters",
+                             "icu_adt_rows", "icu_rows_folded_into_round_trips", "icu_adt_rows_missing_time_or_unit",
                              "adult_icu_intervals", "adult_icu_stays", "adult_unit_stays", "icu_to_icu_transfers"],
-                   "n": [icu_rows_raw, icu_rows_raw - int(icu.sum()),
+                   "n": [n_hospitalizations, len(hosp), int(hosp.loc[hosp["n_hospitalizations"] > 1, "n_hospitalizations"].sum()),
+                         icu_rows_raw, icu_rows_raw - int(icu.sum()),
                          int(adt.loc[icu, ["in_dttm", "out_dttm", "location_name"]].isna().any(axis=1).sum()),
                          len(intervals), len(blocks), len(stays), int(stays["from_icu"].sum())]})
 # A census that falls off at the end means the extract misses patients still in hospital at the cutoff.
@@ -97,7 +112,7 @@ age = (data_end - census.index).days
 last, prior = census[age < 60].mean(), census[(age >= 60) & (age < 120)].mean()
 drain_pct = 100 * last / prior if prior > 0 else float("nan")  # nan: empty ICU in the window before (demo)
 qc = pd.concat([c.suppress_small_cells(qc, ["n"]), pd.DataFrame({
-    "check": ["icu_units", "icu_unit_years_without_capacity_under_4_beds", "census_last_60d_pct_of_prior_60d"],
+    "check": ["icu_units", f"icu_unit_years_without_capacity_under_{c.MIN_UNIT_BEDS}_beds", "census_last_60d_pct_of_prior_60d"],
     "n": pd.Series([n_units, int(excluded.sum()), drain_pct]).round().astype("Int64")})])
 qc.to_csv(final / "census_qc.csv", index=False)
 print(f"\n{qc.to_string(index=False)}\ndata end (last hospital admission): {data_end:%Y-%m-%d}")

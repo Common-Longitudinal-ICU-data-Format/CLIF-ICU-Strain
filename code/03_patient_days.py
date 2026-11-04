@@ -4,7 +4,8 @@ One row per ICU stay per local 7am s the patient is already in a unit at: that u
 other patients over [s, s+24h) as a share of capacity (exposure), in-hospital death or hospice
 discharge over [s+24h, s+8d) (outcome), and covariates measured at or before s.
 
-Reads hospitalization, patient, hospital_diagnosis, code_status, and step 1's intermediates. Writes
+Reads patient, hospital_diagnosis, code_status, and step 1's intermediates, including the stitched
+encounters (one row per encounter, its final discharge category and time) in place of hospitalization. Writes
   intermediate_phi/<site>/patient_days.parquet
   <site>_upload_to_box/attrition.csv
 """
@@ -27,12 +28,9 @@ phi, final = c.phi_dir(site), c.final_dir(site)
 start, end = c.study_window()
 
 co = ClifOrchestrator(data_directory=config["data_directory"], filetype=config["filetype"], timezone=config["timezone"])
-co.initialize(tables=["hospitalization", "patient"], columns={
-    "hospitalization": ["patient_id", "hospitalization_id", "admission_dttm", "discharge_dttm", "age_at_admission",
-                        "discharge_category"],
-    "patient": ["patient_id", "sex_category", "death_dttm"],
-})
-hosp, patient = co.hospitalization.df, co.patient.df
+co.initialize(tables=["patient"], columns={"patient": ["patient_id", "sex_category", "death_dttm"]})
+hosp, patient = pd.read_parquet(phi / "encounters.parquet"), co.patient.df  # stitched in step 1
+encounter_of = pd.read_parquet(phi / "encounter_map.parquet").set_index("hospitalization_id")["encounter_id"]
 stays = pd.read_parquet(phi / "unit_stays.parquet")
 blocks = pd.read_parquet(phi / "icu_blocks.parquet")
 hosp_daily, unit_daily = pd.read_parquet(phi / "daily_by_hospital.parquet"), pd.read_parquet(phi / "daily_by_unit.parquet")
@@ -63,12 +61,13 @@ steps.append(("no death or hospice discharge inside the exposure window", days[d
 steps.append(("outcome window inside the data", days[days["eligible"] & days["in_window"]]))
 
 dx_cols = ["hospitalization_id", "diagnosis_code", "diagnosis_code_format"]
-ids = cohort["hospitalization_id"].unique().tolist()
+ids = encounter_of[encounter_of.isin(cohort["hospitalization_id"])].index.tolist()  # every hospitalization of a cohort encounter
 try:
     co.load_table("hospital_diagnosis", columns=dx_cols + ["poa_present"], filters={"hospitalization_id": ids})
 except Exception:  # site without the column
     co.load_table("hospital_diagnosis", columns=dx_cols, filters={"hospitalization_id": ids})
 dx = co.hospital_diagnosis.df
+dx = dx.assign(hospitalization_id=dx["hospitalization_id"].map(encounter_of))  # Charlson and COVID per encounter
 poa = (dx["poa_present"].astype(str).str.lower().isin(["1", "1.0", "true", "y", "yes"]) if "poa_present" in dx
        else pd.Series(False, index=dx.index))
 use_poa = poa.mean() >= c.MIN_POA_SHARE  # Charlson and COVID from codes present on admission (v3); else every code

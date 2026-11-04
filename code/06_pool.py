@@ -1,7 +1,7 @@
 """Step 6 (coordinating site only): pool every site's model_estimates.csv. Run from repo root.
 
 Reads output/final_no_phi/<site>_upload_to_box/model_estimates.csv for every site present
-(copy other sites' Box uploads there), or the folder named by CLIF_POOL_DIR. Pools the
+(copy other sites' Box uploads there), or the folder named by CLIF_POOL_DIR; demo and MIMIC runs are skipped. Pools the
 per-0.1 log odds ratios (the same scale at every site). Primary: common effect, inverse variance
 (D3: with three sites tau^2 cannot be estimated). Beside it: random effects with Paule-Mandel
 tau^2 and a t interval. Writes output/final_no_phi/pooled/: pooled_estimates.csv, forest_primary.png
@@ -26,7 +26,9 @@ src = Path(os.environ.get("CLIF_POOL_DIR", c.output_root() / "final_no_phi"))
 out = c.output_root() / "final_no_phi" / "pooled"
 out.mkdir(parents=True, exist_ok=True)
 
-est = pd.concat([pd.read_csv(f) for f in sorted(src.glob("*_upload_to_box/model_estimates.csv"))])
+files = [f for f in sorted(src.glob("*_upload_to_box/model_estimates.csv"))
+         if f.parent.name.replace("_upload_to_box", "").lower() not in c.DEV_SITES]  # demo and MIMIC test the code only
+est = pd.concat([pd.read_csv(f) for f in files])
 est = est[(est["status"] == "fit") & est["se"].notna() & est["term"].isin(TERMS)]
 rows = []
 for (m, t), g in est.groupby(["model", "term"], sort=False):
