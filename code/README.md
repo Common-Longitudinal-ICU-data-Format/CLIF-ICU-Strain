@@ -51,8 +51,8 @@ Shared functions live in [`../utils/`](../utils): `common.py` (all tunable const
   their denominators: `readmit_72h` and `after_hours_discharge` (18:00–06:00) among landmarks discharged from
   the ICU inside the exposure window; `new_limitation_48h` (a limitation order in [*s*, *s*+48h)) among
   landmarks not limited at *s*. A limitation is any `code_status_category` but Full, Presume Full and Other;
-  orders with no category are ignored, and only this encounter's orders can be in force at *s* (code status
-  resets at admission).
+  orders with no category are ignored, orders at the same time count as a limitation if any of them is one,
+  and only this encounter's orders can be in force at *s* (code status resets at admission).
 - **Model**: logistic regression, `outcome ~ admit_strain (per +0.1) + age (spline) + sex + Charlson + COVID +
   SOFA components over [s−24h, s) (categorical, with a "not measured" level) + on_imv + on_pressor (any
   invasive ventilation / vasopressor in [s−24h, s), 0/1; vasopressors are norepinephrine, epinephrine,

@@ -210,6 +210,7 @@ def add_outcomes(days: pd.DataFrame, hosp: pd.DataFrame, patient: pd.DataFrame,
         orders = (code_status[["patient_id", "start_dttm", "code_status_category"]].rename(columns={"start_dttm": "t"})
                   .dropna(subset=["code_status_category"]))  # an uncategorized order is neither full code nor a limitation
         orders = orders.assign(limited=~orders["code_status_category"].str.lower().isin(NON_LIMITATION_CODES))
+        orders = orders.groupby(["patient_id", "t"], as_index=False)["limited"].max()  # tied orders: a limitation wins, whatever the row order
         last_t = _event_time(days, orders, "backward")
         at_s = _event_time(days, orders, "backward", value="limited").where(last_t >= days["admission_dttm"])  # resets at admission
         nxt = _event_time(days, orders[orders["limited"]], "forward")
