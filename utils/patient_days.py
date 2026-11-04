@@ -185,6 +185,41 @@ def add_weighted_exposure(days: pd.DataFrame, stays: pd.DataFrame, presence: pd.
     return out
 
 
+def add_present_exposure(days: pd.DataFrame, stays: pd.DataFrame, unit_daily: pd.DataFrame) -> pd.DataFrame:
+    """v6: other patients' admissions to the unit while the patient is still in it, over [s, min(stay_out, s+24h)),
+    as a rate over the strain day / capacity (present_admit_strain), with hours_present; and the same hours one week
+    earlier (placebo_present_admit_strain; NA when that day is before the unit's first strain day).
+
+    A patient present all day gets exactly admit_strain. Nothing after the patient's own exit is counted, so the bed
+    that exit frees cannot raise their exposure.
+    """
+    days = days.reset_index(drop=True)
+    cast = {"hospital_id": days["hospital_id"].dtype}
+    grid = unit_daily[UNIT + ["day_start"]].astype(cast).sort_values("day_start")
+    adm = stays[["hospitalization_id", *UNIT, "in_dttm"]].astype(cast).sort_values("in_dttm")
+    adm = pd.merge_asof(adm, grid.rename(columns={"day_start": "_key"}), left_on="in_dttm", right_on="_key", by=UNIT)
+    adm = adm.dropna(subset=["_key"]).rename(columns={"hospitalization_id": "_other"})  # keyed by the strain day holding the admission
+    s = days["day_start"]
+    cut = days["stay_out"].where(days["stay_out"] < days["day_end"], days["day_end"])
+    hours = (cut - s).dt.total_seconds() / 3600
+    day_hours = (days["day_end"] - s).dt.total_seconds() / 3600
+
+    def count(lo, hi):
+        """Admissions by other patients to the row's unit in [lo, hi); NA when lo is not a strain day of the unit."""
+        r = days[["hospitalization_id", *UNIT]].assign(_lo=lo, _hi=hi, _row=np.arange(len(days)))
+        m = r.merge(adm.rename(columns={"_key": "_lo"}), on=[*UNIT, "_lo"], how="left")
+        hit = m[(m["in_dttm"] >= m["_lo"]) & (m["in_dttm"] < m["_hi"]) & (m["_other"] != m["hospitalization_id"])]
+        n = hit.groupby("_row").size().reindex(range(len(days)), fill_value=0).to_numpy()
+        known = r[[*UNIT, "_lo"]].merge(grid.rename(columns={"day_start": "_lo"}).assign(_k=True), on=[*UNIT, "_lo"], how="left")["_k"]
+        return pd.Series(np.where(known.fillna(False).to_numpy(), n, np.nan), index=days.index)
+
+    out = days.assign(hours_present=hours, present_admits=count(s, cut))
+    out["present_admit_strain"] = out["present_admits"] / hours * day_hours / out["capacity_p99"]
+    lo = plus_days(s, -7)
+    out["placebo_present_admit_strain"] = count(lo, lo + (cut - s)) / hours * day_hours / out["capacity_p99"]
+    return out
+
+
 def _events(hosp: pd.DataFrame, kinds) -> pd.DataFrame:
     disp = hosp["discharge_category"].str.lower()
     e = hosp.loc[disp.isin(kinds) & hosp["discharge_dttm"].notna(), ["patient_id", "discharge_dttm"]]

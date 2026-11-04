@@ -38,6 +38,7 @@ days["occ_c10"] = (days["census_strain"] - c.OCCUPANCY_CENTER) * 10  # occupancy
 days["occ_hinge10"] = (days["census_strain"] - c.OCCUPANCY_TIPPING).clip(lower=0) * 10  # slope change above the tipping point
 days["placebo10"] = days["placebo_admit_strain"] * 10
 days["placebo_past10"] = days["placebo_past_admit_strain"] * 10
+days["placebo_present10"] = days["placebo_present_admit_strain"] * 10
 for comp in COMPONENTS:
     days[f"{comp}_cat"] = days[comp].fillna(-1).astype(int)  # -1: not measured in [s-24h, s)
 days["on_imv"] = days["on_imv"].fillna(False).astype(int)  # any time in [s-24h, s)
@@ -71,6 +72,7 @@ CHECKS = [  # fitted first: does the exposure move what strain should move?
     ("positive_control_weighted_admissions", "icu_discharge_24h", "wadmit_strain", [], {}),                    # v5
     ("positive_control_weighted_census", "icu_discharge_24h", "wcensus_strain", [], {"drop": ["occ_c10"]}),    # v5
     ("positive_control_ed_discharge", "icu_discharge_24h", "ed_strain", [], {}),  # v6: does demand, not bed turnover, move incumbents out?
+    ("positive_control_prior_day", "icu_discharge_24h", "prior_admit_strain", [], {"drop": ["prior_admit_strain"]}),  # does yesterday's surge move them out today?
 ]
 BALANCE = ["sofa_total", "age_at_admission", "cci_score", "on_imv"]  # baseline covariates regressed on the exposure
 MODELS = [
@@ -109,11 +111,19 @@ MODELS = [
     # --- v6: the turnover mechanism (a patient's own exit frees the bed the exposure counts) ---
     ("same_day_hdhd_ed_arrivals", "hdhd_0_24h", "ed_strain", [], {"rows": "all"}),            # harm inside the exposure window, on demand a death cannot cause
     ("same_day_hdhd_admissions", "hdhd_0_24h", "admit_strain", [], {"rows": "all"}),           # the same on admissions: a death frees a bed, so it leans up
-    ("prior_day_admissions", "hdhd_7d", "prior_admit_strain", [], {"drop": ["prior_admit_strain"]}),  # exposure before s: nothing the patient does after s can cause it
+    ("prior_day_admissions", "hdhd_7d", "prior_admit_strain", [], {"drop": ["prior_admit_strain"], "spline": True}),  # exposure before s: nothing the patient does after s can cause it
     ("primary_no_exit", "hdhd_7d", "admit_strain", [], {"rows": "unit_exit_24h == 0"}),       # conditions on staying (leans toward harm); brackets the primary with it
     ("obligate_ed_reduced_form", "hdhd_7d", "ed_strain", [], {"rows": "obligate"}),
     ("weighted_census_validated_units", "hdhd_7d", "wcensus_strain", [], {"rows": "validated", "drop": ["occ_c10"]}),
     ("weighted_occupancy_validated_units", "hdhd_7d", "wocc_strain", [], {"rows": "validated"}),
+    # --- v6 candidates for the primary: exposures the patient's own exit cannot raise ---
+    ("prior_day_placebo_past", "hdhd_7d", "prior_admit_strain", ["placebo_past10"], {"drop": ["prior_admit_strain"]}),  # [s-8d, s-7d): a week before the prior day
+    ("prior_day_obligate", "hdhd_7d", "prior_admit_strain", [], {"rows": "obligate", "drop": ["prior_admit_strain"]}),
+    ("prior_day_hdhd_30d", "hdhd_30d", "prior_admit_strain", [], {"drop": ["prior_admit_strain"]}),
+    ("present_admissions", "hdhd_7d", "present_admit_strain", [], {"spline": True}),        # admissions while the patient is there, as a rate over the day
+    ("present_placebo_past", "hdhd_7d", "present_admit_strain", ["placebo_present10"], {}),  # the same hours a week earlier
+    ("present_obligate", "hdhd_7d", "present_admit_strain", [], {"rows": "obligate"}),
+    ("present_hdhd_30d", "hdhd_30d", "present_admit_strain", [], {}),
 ]
 
 
@@ -272,6 +282,8 @@ table1 = pd.DataFrame([
     ("Other incumbents on ventilation or vasopressor / capacity, median (IQR)", med_iqr(days["wocc_strain"], 2)),
     ("Exposure: others' admissions in the next 24h / capacity, median (IQR)", med_iqr(days["admit_strain"], 2)),
     ("  acuity-weighted (1 + IMV + vasopressor + CRRT per admission), median (IQR)", med_iqr(days["wadmit_strain"], 2)),
+    ("  while the patient is present, as a rate over the day / capacity, median (IQR)", med_iqr(days["present_admit_strain"], 2)),
+    ("Hours present in the exposure window, median (IQR)", med_iqr(days["hours_present"], 1)),
     ("Other patients present at the landmark, acuity-weighted / capacity, median (IQR)", med_iqr(days["wcensus_strain"], 2)),
     ("Hospital ED arrivals in the next 24h / hospital ICU capacity, median (IQR)", med_iqr(days["ed_strain"], 2)),
     ("ICU discharge inside the exposure window, n (%)", n_pct(days["icu_discharge_24h"].eq(1))),
@@ -285,7 +297,7 @@ table1 = pd.DataFrame([
 table1.to_csv(final / "table1.csv", index=False)
 
 print(table1.to_string(index=False))
-show = est[est["term"].isin(["per10", "placebo10", "placebo_past10", "placebo_ed10", "per10:occ_c10", "occ_hinge10",
+show = est[est["term"].isin(["per10", "placebo10", "placebo_past10", "placebo_present10", "placebo_ed10", "per10:occ_c10", "occ_hinge10",
                              "wocc10", "per10:wocc10", "first_stage_t2", "per_iqr", "p75_vs_p25"])]
 print(show[["model", "term", "estimate", "se", "odds_ratio", "ci_low", "ci_high", "n_obs", "n_events", "status"]]
       .round(4).to_string(index=False))
