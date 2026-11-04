@@ -1,7 +1,6 @@
 ## Configuration
 
-1. Rename `config_template.json` to `config.json`.
-2. Fill in your site-specific settings:
+`config.json` is the only config. Edit it for your site before running:
    - `site_name` — your site's identifier; names the output folders
      `output/intermediate_phi/<site_name>/` and `output/final_no_phi/<site_name>_upload_to_box/`.
    - `data_directory` — path to the directory holding your CLIF table files
@@ -15,9 +14,5 @@
 
 Outputs always go to `output/` (or `CLIF_OUTPUT_ROOT`).
 
-This file uses the **clifpy config schema**. The scripts in `code/` read it directly; set
-`CLIF_CONFIG_PATH` to point them at a different file. `run_pipeline.py` does this for you: keep
-several sites as `config_<site>.json` (also git-ignored) and run
-`uv run python run_pipeline.py config/config_<site>.json`.
-
-Note: the `.gitignore` in this directory keeps `config.json` out of the remote repository.
+This file uses the **clifpy config schema**; every script in `code/` reads it directly. Don't commit your
+site's values.
