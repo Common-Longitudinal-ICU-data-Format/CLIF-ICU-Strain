@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from .common import (AFTER_HOURS, COVID_ICD10_PREFIX, EXPOSURE_HOURS, LIMITATION_HOURS, MIN_AGE, NON_LIMITATION_CODES,
-                     OUTCOME_DAYS, OUTCOME_DAYS_LONG, PLACEBO_OFFSET_DAYS, READMIT_HOURS, UNIT)
+                     OUTCOME_DAYS, OUTCOME_DAYS_LONG, PLACEBO_OFFSET_DAYS, READMIT_HOURS, SUPPORT_HOURS, UNIT)
 from .encounters import death_times
 
 EXPOSURE = pd.Timedelta(hours=EXPOSURE_HOURS)
@@ -81,15 +81,17 @@ def assign_unit(days: pd.DataFrame, stays: pd.DataFrame) -> pd.DataFrame:
     return back
 
 
-def own_admissions(days: pd.DataFrame, stays: pd.DataFrame, lo: pd.Series, hi: pd.Series) -> pd.Series:
-    """Per row, how many of the patient's own stays in the row's unit begin in [lo, hi).
+def own_admissions(days: pd.DataFrame, stays: pd.DataFrame, lo: pd.Series, hi: pd.Series, weight: str | None = None) -> pd.Series:
+    """Per row, how many of the patient's own stays in the row's unit begin in [lo, hi) (or their `weight` summed).
 
     Every stay counts, not only the one holding the landmark: a bounce-back inside the window
     is the patient's own admission, not someone else's. `lo` and `hi` share `days`' index.
     """
     d = days[["hospitalization_id", *UNIT]].assign(_lo=lo, _hi=hi, _row=np.arange(len(days)))
-    m = d.merge(stays[["hospitalization_id", *UNIT, "in_dttm"]], on=["hospitalization_id", *UNIT])  # a unit is hospital + name
-    n = m[(m["in_dttm"] >= m["_lo"]) & (m["in_dttm"] < m["_hi"])].groupby("_row").size()
+    cols = ["hospitalization_id", *UNIT, "in_dttm", *([weight] if weight else [])]
+    m = d.merge(stays[cols], on=["hospitalization_id", *UNIT])  # a unit is hospital + name
+    hit = m[(m["in_dttm"] >= m["_lo"]) & (m["in_dttm"] < m["_hi"])].groupby("_row")
+    n = hit[weight].sum() if weight else hit.size()
     return pd.Series(n.reindex(range(len(days)), fill_value=0).to_numpy(), index=days.index)
 
 
@@ -132,6 +134,54 @@ def add_exposure(days: pd.DataFrame, stays: pd.DataFrame, unit_daily: pd.DataFra
         for name, end in [("ed_strain", out["day_end"]), ("prior_ed_strain", s),
                           ("placebo_ed_strain", plus_days(s, PLACEBO_OFFSET_DAYS + 1))]:
             out[name] = out[["hospital_id"]].assign(_end=end).merge(ed, on=["hospital_id", "_end"], how="left")["ed_strain"].to_numpy()
+    return out
+
+
+def unit_presence(stays: pd.DataFrame, unit_daily: pd.DataFrame) -> pd.DataFrame:
+    """One row per unit stay per unit strain day s (unit_daily's 7ams) with in_dttm <= s < out_dttm: who is in the unit at s.
+
+    The same convention as the 7am census: arriving exactly at 7:00 counts, leaving exactly at 7:00 does not.
+    """
+    u = unit_daily[UNIT + ["day_start"]].assign(hospital_id=unit_daily["hospital_id"].astype(stays["hospital_id"].dtype))
+    u = u.sort_values(UNIT + ["day_start"]).assign(_n=lambda d: d.groupby(UNIT).cumcount()).sort_values("day_start")
+    st = stays[["hospitalization_id", *UNIT, "in_dttm", "out_dttm"]].reset_index(drop=True)
+    c = pd.merge_asof(st.sort_values("in_dttm"), u.rename(columns={"day_start": "_d0", "_n": "_first"}),
+                      left_on="in_dttm", right_on="_d0", by=UNIT, direction="forward")  # first 7am at or after arrival
+    c = pd.merge_asof(c.sort_values("out_dttm"), u.rename(columns={"day_start": "_d1", "_n": "_last"}),
+                      left_on="out_dttm", right_on="_d1", by=UNIT, allow_exact_matches=False)  # last 7am before leaving
+    c = c.dropna(subset=["_first", "_last"])
+    n = (c["_last"] - c["_first"] + 1).astype(int)
+    c, n = c[n > 0], n[n > 0]
+    rows = c.loc[c.index.repeat(n)].copy()
+    rows["_n"] = rows["_first"].astype(int) + rows.groupby(level=0).cumcount()
+    rows = rows.drop(columns=["_d0", "_d1", "_first", "_last"]).merge(u, on=UNIT + ["_n"])
+    return rows[["hospitalization_id", *UNIT, "in_dttm", "out_dttm", "day_start"]].reset_index(drop=True)
+
+
+def add_weighted_exposure(days: pd.DataFrame, stays: pd.DataFrame, presence: pd.DataFrame, unit_daily: pd.DataFrame) -> pd.DataFrame:
+    """Acuity-weighted strain (v5): other patients' weights summed over admissions to the unit in [s, s+24h)
+    (wadmits, wadmit_strain) and over patients present at s (wcensus, wcensus_strain), each / that year's capacity.
+
+    `stays` carries `w_arrival` (the patient's weight over the first SUPPORT_HOURS of the unit stay) and
+    `presence` (unit_presence rows) carries `w_present` (over the SUPPORT_HOURS before s). The patient's own
+    stays and presence are left out. With every weight 1, wadmits is `admits` and wcensus is the census at s less one.
+    """
+    days = days.reset_index(drop=True)
+    cast = {"hospital_id": days["hospital_id"].dtype}
+    u = unit_daily[UNIT + ["day_start"]].astype(cast).rename(columns={"day_start": "_end"}).sort_values("_end")
+    st = stays[["hospitalization_id", *UNIT, "in_dttm", "w_arrival"]].astype(cast).sort_values("in_dttm")
+    nxt = pd.merge_asof(st, u, left_on="in_dttm", right_on="_end", by=UNIT, direction="forward", allow_exact_matches=False)
+    arrivals = nxt.groupby(UNIT + ["_end"])["w_arrival"].sum().rename("wadmits").reset_index().rename(columns={"_end": "day_end"})
+    out = days.merge(arrivals, on=UNIT + ["day_end"], how="left")
+    own = own_admissions(out, st, out["day_start"], out["day_end"], weight="w_arrival")
+    out["wadmits"] = out["wadmits"].fillna(0).to_numpy() - own.to_numpy()
+    pres = presence.astype(cast)
+    out = out.merge(pres.groupby(UNIT + ["day_start"])["w_present"].sum().rename("wcensus").reset_index(), on=UNIT + ["day_start"], how="left")
+    own = out[["hospitalization_id", *UNIT, "day_start"]].merge(pres[["hospitalization_id", *UNIT, "day_start", "w_present"]],
+                                                               on=["hospitalization_id", *UNIT, "day_start"], how="left")["w_present"]
+    out["wcensus"] = out["wcensus"].fillna(0).to_numpy() - own.fillna(0).to_numpy()
+    out["wadmit_strain"] = out["wadmits"] / out["capacity_p99"]
+    out["wcensus_strain"] = out["wcensus"] / out["capacity_p99"]
     return out
 
 

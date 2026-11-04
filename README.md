@@ -10,7 +10,8 @@ Determine the association of ICU strain with mortality. Strain is measured per I
 table: for each patient already in a unit at 7am, how many other patients were admitted to that unit
 over the next 24 hours, relative to the unit's capacity that year. The outcome is in-hospital death or
 hospice discharge over the following 7 days (from 24 hours to 8 days after that 7am), taken from
-hospital records only so it is the same at every site.
+hospital records only so it is the same at every site. A secondary, acuity-weighted strain counts each other
+patient as 1 + invasive ventilation + vasopressor + CRRT, over the admissions and over the patients present at 7am.
 
 ## Required CLIF tables and fields
 
@@ -33,6 +34,8 @@ hospital records only so it is the same at every site.
    whether the patient was on invasive ventilation or a vasopressor in that window.
 6. **code_status** (optional: `patient_id`, `start_dttm`, `code_status_category`) — new limitation orders,
    a process outcome; without it that outcome is NA.
+7. **crrt_therapy** (optional: `hospitalization_id`, `recorded_dttm`) — CRRT in the acuity weights, with invasive
+   ventilation and vasopressors from the tables above; without it the weights use those two only.
 
 ## Cohort identification
 

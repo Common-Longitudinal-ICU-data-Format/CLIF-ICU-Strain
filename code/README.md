@@ -10,7 +10,7 @@ the site's two output folders: `output/intermediate_phi/<site>/` (row-level, nev
 |---|---|---|
 | `01_census.py` | `hospitalization`, `adt` (stops if `hospital_id` has nulls: a null key silently empties the census); stitches hospitalizations within 6 h into encounters (clifpy) | `capacity_by_{unit,hospital}.csv` (one row per unit-year / hospital-year), `monthly_strain_by_{unit,hospital}.csv`, `census_qc.csv`, `monthly_admit_strain_by_unit.png`; encounters (first admission, last discharge and its category), the hospitalization-to-encounter map, ICU blocks, unit stays, rolling census and daily strain to `intermediate_phi/` |
 | `02_strain_figures.py` | step 1 | Will's per-unit figures (`census_week.png`, `daily_admit_strain.png`) to `intermediate_phi/<site>/figures/` only: they show daily counts under 11. Optional arg: week start `YYYY-MM-DD` |
-| `03_patient_days.py` | `patient`, `hospital_diagnosis` (mapped to encounters), step 1 (encounters in place of `hospitalization`) | `attrition.csv` (ICU stays, patients, landmarks per step; outcome split; a text row naming the Charlson/COVID code source, with the share flagged POA and the share in ICD10CM); landmark rows `patient_days.parquet` to `intermediate_phi/` |
+| `03_patient_days.py` | `patient`, `hospital_diagnosis` (mapped to encounters), step 1 (encounters in place of `hospitalization`); respiratory_support, medication_admin_continuous and crrt_therapy (polars) for the acuity weights | `attrition.csv` (ICU stays, patients, landmarks per step; outcome split; a text row naming the Charlson/COVID code source, with the share flagged POA and the share in ICD10CM); landmark rows `patient_days.parquet` to `intermediate_phi/` |
 | `04_sofa.py` | vitals, labs, patient_assessments, respiratory_support, medication_admin_continuous (read with polars, scored with clifpy per landmark window) | `sofa_landmark.parquet` and the window-keyed `sofa_input/` tables to `intermediate_phi/` |
 | `05_models.py` | steps 3–4 | `model_estimates.csv`, `unit_year_gate.csv` (positive control per unit-year), `table1.csv`, `spline_primary.png` |
 | `06_pool.py` | every site's `model_estimates.csv` under `output/final_no_phi/*_upload_to_box/` (or `CLIF_POOL_DIR`), skipping `demo` and `mimic`; coordinating site only, not run by `run_pipeline.py` | `final_no_phi/pooled/`: `pooled_estimates.csv`, `forest_primary.png` |
@@ -41,7 +41,10 @@ Shared functions live in [`../utils/`](../utils): `common.py` (all tunable const
   `hosp_admit_strain`, `hosp_census_strain`. v4: `wocc_strain` (other incumbents of the unit on IMV or a
   vasopressor at *s* ÷ capacity, A2); `ed_strain` (hospital ED arrivals over [*s*, *s*+24h) ÷ hospital ICU
   capacity: demand the ICU's own bed-freeing cannot cause, A3), with `prior_ed_strain` and `placebo_ed_strain`
-  over [*s*−24h, *s*) and [*s*+8d, *s*+9d).
+  over [*s*−24h, *s*) and [*s*+8d, *s*+9d). v5: `wadmit_strain` and `wcensus_strain`, the same admissions and the
+  other patients present at *s* (arrived at or before *s*, not yet left), each counted as 1 + invasive ventilation +
+  vasopressor + CRRT charted in the first 6 h of the unit stay (an arrival) or the 6 h before *s* (a patient present),
+  ÷ capacity; the index patient is left out of both.
 - **Outcome**: in-hospital death (discharged expired) or hospice discharge in [*s*+24h, *s*+8d), from hospital
   records across the patient's hospitalizations (`hdhd_7d`, "HDHD-7"). A row with such an event inside
   [*s*, *s*+24h) is excluded (`eligible`). Secondaries: `hdhd_30d`, `death_7d` (in-hospital death only),
@@ -79,7 +82,9 @@ Shared functions live in [`../utils/`](../utils): `common.py` (all tunable const
   validated unit-years; A2 weighted occupancy, a hinge above 92.5% occupancy, an occupancy spline, and
   occupancy × support; A3 the ED-arrival reduced form, two-stage residual inclusion (2SRI: the first-stage
   residual of admissions on ED arrivals enters the outcome model) and an ED placebo; B1 the process outcomes;
-  B3 the obligate-ICU subgroup for weighted occupancy and the IV. The 2SRI SEs are the second stage's
+  B3 the obligate-ICU subgroup for weighted occupancy and the IV. v5: positive controls (ICU discharge) and
+  mortality models with splines for the acuity-weighted admissions and census, and the obligate-ICU subgroup for
+  weighted admissions. The 2SRI SEs are the second stage's
   clustered SEs, not corrected for the estimated first-stage residual (small with first-stage t² of 97–3,039;
   bootstrap both stages by unit-week if the IV becomes a headline).
 - **Pooling** (`06_pool.py`): common effect (inverse variance) is the primary pool; random effects with

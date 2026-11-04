@@ -50,6 +50,7 @@ LIMITATION_HOURS = 48                # new DNR/DNI (or any other limitation) ord
 AFTER_HOURS = (18, 6)                # ICU discharge from 18:00 to 06:00 local
 NON_LIMITATION_CODES = {"full", "presume full", "other"}   # any other code_status_category is a limitation (dnr, dnar, udnr, dnr/dni, dnar/dni, dni_only, and)
 MIN_GATE_EVENTS = 11                 # a unit-year needs this many discharges to be gated (A1)
+SUPPORT_HOURS = 6                    # acuity weight: IMV / vasopressor / CRRT charted in the first 6 h of a unit stay, or the 6 h before s
 
 # --- Disclosure ---------------------------------------------------------------------
 MIN_CELL_SIZE = 11                   # suppress any shared count below this
