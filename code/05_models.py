@@ -3,7 +3,8 @@ and the estimates this site shares. Run after 04.
 
 Writes to <site>_upload_to_box/: model_estimates.csv, unit_year_gate.csv, table1.csv, spline_primary.png.
 Odds ratios are per +0.1 of unit capacity (admissions by others over the next 24h for the primary;
-other incumbents on organ support, or hospital ED arrivals, for the v4 exposures). Estimates and SEs are
+other incumbents on organ support, or hospital ED arrivals, for the v4 exposures; acuity-weighted admissions or
+census for the v5 ones). Estimates and SEs are
 written unrounded. The exposure checks (positive controls, balance, the per-unit-year gate) are fitted
 before any mortality model.
 """
@@ -64,6 +65,8 @@ CLUSTER = ["patient_id", "unit_week"]  # a patient's landmarks are correlated, a
 CHECKS = [  # fitted first: does the exposure move what strain should move?
     ("positive_control_icu_discharge_24h", "icu_discharge_24h", "admit_strain", [], {}),
     ("positive_control_unit_exit_24h", "unit_exit_24h", "admit_strain", [], {}),
+    ("positive_control_weighted_admissions", "icu_discharge_24h", "wadmit_strain", [], {}),                    # v5
+    ("positive_control_weighted_census", "icu_discharge_24h", "wcensus_strain", [], {"drop": ["occ_c10"]}),    # v5
 ]
 BALANCE = ["sofa_total", "age_at_admission", "cci_score", "on_imv"]  # baseline covariates regressed on the exposure
 MODELS = [
@@ -95,6 +98,10 @@ MODELS = [
     ("new_limitation_48h", "new_limitation_48h", "admit_strain", [], {}),                                      # B1
     ("obligate_weighted_occupancy", "hdhd_7d", "wocc_strain", [], {"rows": "obligate"}),                       # B3
     ("obligate_ed_arrivals_iv", "hdhd_7d", "admit_strain", [], {"rows": "obligate", "iv": "ed10"}),            # B3
+    # --- v5: acuity-weighted strain (1 + IMV + vasopressor + CRRT per other patient) ---
+    ("weighted_admissions", "hdhd_7d", "wadmit_strain", [], {"spline": True}),
+    ("weighted_census", "hdhd_7d", "wcensus_strain", [], {"drop": ["occ_c10"], "spline": True}),
+    ("obligate_weighted_admissions", "hdhd_7d", "wadmit_strain", [], {"rows": "obligate"}),
 ]
 
 
@@ -245,6 +252,8 @@ table1 = pd.DataFrame([
     ("Unit occupancy at the landmark (census / capacity), median (IQR)", med_iqr(days["census_strain"], 2)),
     ("Other incumbents on ventilation or vasopressor / capacity, median (IQR)", med_iqr(days["wocc_strain"], 2)),
     ("Exposure: others' admissions in the next 24h / capacity, median (IQR)", med_iqr(days["admit_strain"], 2)),
+    ("  acuity-weighted (1 + IMV + vasopressor + CRRT per admission), median (IQR)", med_iqr(days["wadmit_strain"], 2)),
+    ("Other patients present at the landmark, acuity-weighted / capacity, median (IQR)", med_iqr(days["wcensus_strain"], 2)),
     ("Hospital ED arrivals in the next 24h / hospital ICU capacity, median (IQR)", med_iqr(days["ed_strain"], 2)),
     ("ICU discharge inside the exposure window, n (%)", n_pct(days["icu_discharge_24h"].eq(1))),
     ("  readmitted to an ICU within 72h, n (% of those discharged)", n_pct(days["readmit_72h"].dropna().eq(1))),

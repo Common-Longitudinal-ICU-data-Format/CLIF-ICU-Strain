@@ -2,7 +2,8 @@
 
 One row per ICU stay per local 7am s the patient is already in a unit at: that unit's admissions by
 other patients over [s, s+24h) as a share of capacity (exposure), in-hospital death or hospice
-discharge over [s+24h, s+8d) (outcome), and covariates measured at or before s.
+discharge over [s+24h, s+8d) (outcome), and covariates measured at or before s. v5 adds the acuity-weighted
+admissions and census (respiratory_support, medication_admin_continuous and crrt_therapy, read with polars).
 
 Reads patient, hospital_diagnosis, code_status, and step 1's intermediates, including the stitched
 encounters (one row per encounter, its final discharge category and time) in place of hospitalization. Writes
@@ -17,10 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from clifpy import ClifOrchestrator, calculate_cci
 
 from utils import common as c
-from utils.patient_days import add_exposure, add_outcomes, assign_unit, covid_hospitalizations, expand_patient_days, icu_cohort
+from utils.patient_days import (add_exposure, add_outcomes, add_weighted_exposure, assign_unit, covid_hospitalizations,
+                                expand_patient_days, icu_cohort, unit_presence)
+from utils.support import KINDS, support_events, support_in, weights
 
 config = c.load_config()
 site = config["site_name"]
@@ -44,6 +48,23 @@ days = days[days["incumbent"]]  # in the unit before 7am s; the arrival day (aft
 steps.append(("landmarks: in the unit before 7am s", days))
 days = add_exposure(days, stays, unit_daily, hosp_daily).dropna(subset=["admit_strain"])  # no capacity (D6) or no next day
 steps.append(("with unit admissions over [s, s+24h) and capacity", days))
+
+# v5: acuity weights (1 + IMV + vasopressor + CRRT) for every adult ICU unit stay, over its first SUPPORT_HOURS (an
+# arrival's weight) and over the SUPPORT_HOURS before each 7am it holds (a present patient's weight)
+emap = (pl.read_parquet(phi / "encounter_map.parquet").with_columns(pl.all().cast(pl.Utf8))
+        .filter(pl.col("encounter_id").is_in(stays["hospitalization_id"].astype(str).unique().tolist())))
+events = support_events(config, emap)
+span = pd.Timedelta(hours=c.SUPPORT_HOURS)
+arrive_end = (stays["in_dttm"] + span).where(stays["in_dttm"] + span < stays["out_dttm"], stays["out_dttm"])
+stays = support_in(stays.assign(_end=arrive_end), events, "in_dttm", "_end")
+stays["w_arrival"] = weights(stays)
+presence = unit_presence(stays, unit_daily)
+present_start = (presence["day_start"] - span).where(presence["day_start"] - span > presence["in_dttm"], presence["in_dttm"])
+presence = support_in(presence.assign(_start=present_start), events, "_start", "day_start")
+presence["w_present"] = weights(presence)
+days = add_weighted_exposure(days, stays, presence, unit_daily)
+print("support in the first 6 h of a unit stay (% of stays): " + ", ".join(f"{k} {100 * stays[k].mean():.1f}" for k in KINDS)
+      + f"; weighted / unweighted admissions in the exposure window {days['wadmits'].sum() / max(days['admits'].sum(), 1):.2f}")
 
 try:  # v4 process outcome: new limitation orders; a site without the table gets NA
     co.load_table("code_status", columns=["patient_id", "start_dttm", "code_status_category"],
