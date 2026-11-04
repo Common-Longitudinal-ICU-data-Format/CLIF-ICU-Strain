@@ -44,7 +44,10 @@ Shared functions live in [`../utils/`](../utils): `common.py` (all tunable const
   over [*s*−24h, *s*) and [*s*+8d, *s*+9d). v5: `wadmit_strain` and `wcensus_strain`, the same admissions and the
   other patients present at *s* (arrived at or before *s*, not yet left), each counted as 1 + invasive ventilation +
   vasopressor + CRRT charted in the first 6 h of the unit stay (an arrival) or the 6 h before *s* (a patient present),
-  ÷ capacity; the index patient is left out of both.
+  ÷ capacity; the index patient is left out of both. v6: `present_admit_strain`, other patients' admissions while the
+  patient is still in the unit, [*s*, min(exit, *s*+24h)), as a rate over the strain day ÷ capacity (a patient present all
+  day gets exactly `admit_strain`; nothing after the patient's own exit is counted, so the bed that exit frees cannot
+  raise their exposure), with `hours_present` and `placebo_present_admit_strain` (the same hours one week earlier).
 - **Outcome**: in-hospital death (discharged expired) or hospice discharge in [*s*+24h, *s*+8d), from hospital
   records across the patient's hospitalizations (`hdhd_7d`, "HDHD-7"). A row with such an event inside
   [*s*, *s*+24h) is excluded (`eligible`). Secondaries: `hdhd_30d`, `death_7d` (in-hospital death only),
@@ -84,7 +87,15 @@ Shared functions live in [`../utils/`](../utils): `common.py` (all tunable const
   residual of admissions on ED arrivals enters the outcome model) and an ED placebo; B1 the process outcomes;
   B3 the obligate-ICU subgroup for weighted occupancy and the IV. v5: positive controls (ICU discharge) and
   mortality models with splines for the acuity-weighted admissions and census, and the obligate-ICU subgroup for
-  weighted admissions. The 2SRI SEs are the second stage's
+  weighted admissions. v6: a patient's own exit inside [*s*, *s*+24h) frees a bed the exposure counts, and leaving alive
+  predicts survival, which pulls the primary toward protection; so 05 also fits the size of that shift
+  (`exposure_shift_per_own_exit`: `admit_strain` on `unit_exit_24h` within unit-year), the event inside [*s*, *s*+24h)
+  on all incumbents against ED arrivals and against admissions, ICU discharge against ED arrivals and against the prior
+  day's admissions, the primary on patients who did not leave within 24 h, the obligate-ICU reduced form on ED arrivals,
+  the weighted census and occupancy on validated unit-years, and two candidate primaries the patient's exit cannot
+  raise, each with a spline, its past placebo, the obligate-ICU subgroup and HDHD-30: `prior_admit_strain` (admissions
+  over [*s*−24h, *s*); its placebo is [*s*−8d, *s*−7d), dropped from the covariates when it is the exposure) and
+  `present_admit_strain`. The 2SRI SEs are the second stage's
   clustered SEs, not corrected for the estimated first-stage residual (small with first-stage t² of 97–3,039;
   bootstrap both stages by unit-week if the IV becomes a headline).
 - **Pooling** (`06_pool.py`): common effect (inverse variance) is the primary pool; random effects with

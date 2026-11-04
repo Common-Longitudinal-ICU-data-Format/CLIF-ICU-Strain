@@ -22,7 +22,7 @@ import polars as pl
 from clifpy import ClifOrchestrator, calculate_cci
 
 from utils import common as c
-from utils.patient_days import (add_exposure, add_outcomes, add_weighted_exposure, assign_unit, covid_hospitalizations,
+from utils.patient_days import (add_exposure, add_outcomes, add_present_exposure, add_weighted_exposure, assign_unit, covid_hospitalizations,
                                 expand_patient_days, icu_cohort, unit_presence)
 from utils.support import KINDS, support_events, support_in, weights
 
@@ -65,6 +65,10 @@ presence["w_present"] = weights(presence)
 days = add_weighted_exposure(days, stays, presence, unit_daily)
 print("support in the first 6 h of a unit stay (% of stays): " + ", ".join(f"{k} {100 * stays[k].mean():.1f}" for k in KINDS)
       + f"; weighted / unweighted admissions in the exposure window {days['wadmits'].sum() / max(days['admits'].sum(), 1):.2f}")
+days = add_present_exposure(days, stays, unit_daily)  # v6: admissions while the patient is there, as a rate
+left = days["stay_out"] < days["day_end"]
+print(f"left the unit inside the exposure window: {100 * left.mean():.0f}% of landmarks, "
+      f"median {days.loc[left, 'hours_present'].median():.1f} h present")
 
 try:  # v4 process outcome: new limitation orders; a site without the table gets NA
     co.load_table("code_status", columns=["patient_id", "start_dttm", "code_status_category"],
