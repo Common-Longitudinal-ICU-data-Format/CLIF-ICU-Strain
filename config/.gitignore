@@ -1,1 +1,3 @@
 config.json
+config_*.json
+!config_template.json
