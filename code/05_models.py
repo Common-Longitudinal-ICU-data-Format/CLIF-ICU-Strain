@@ -48,7 +48,10 @@ support = days["obligate"].astype(int)
 days["wocc_strain"] = (support.groupby([days["unit"], days["day_start"]]).transform("sum") - support) / days["capacity_p99"]
 days["wocc10"] = days["wocc_strain"] * 10
 if "in_window" in days:  # unit workload above counted every incumbent; the models use the eligible rows only
+    all_days = days[days["in_window"]].assign(hdhd_0_24h=lambda d: (~d["eligible"]).astype(int))  # v6: the event inside [s, s+24h)
     days = days[days["eligible"] & days["in_window"]].copy()
+else:
+    all_days = days.assign(hdhd_0_24h=0)
 for col in ["ed_strain", "prior_ed_strain", "placebo_ed_strain"]:  # v4 A3: hospital ED arrivals / hospital ICU capacity
     if col not in days:
         days[col] = np.nan
@@ -67,6 +70,7 @@ CHECKS = [  # fitted first: does the exposure move what strain should move?
     ("positive_control_unit_exit_24h", "unit_exit_24h", "admit_strain", [], {}),
     ("positive_control_weighted_admissions", "icu_discharge_24h", "wadmit_strain", [], {}),                    # v5
     ("positive_control_weighted_census", "icu_discharge_24h", "wcensus_strain", [], {"drop": ["occ_c10"]}),    # v5
+    ("positive_control_ed_discharge", "icu_discharge_24h", "ed_strain", [], {}),  # v6: does demand, not bed turnover, move incumbents out?
 ]
 BALANCE = ["sofa_total", "age_at_admission", "cci_score", "on_imv"]  # baseline covariates regressed on the exposure
 MODELS = [
@@ -102,6 +106,14 @@ MODELS = [
     ("weighted_admissions", "hdhd_7d", "wadmit_strain", [], {"spline": True}),
     ("weighted_census", "hdhd_7d", "wcensus_strain", [], {"drop": ["occ_c10"], "spline": True}),
     ("obligate_weighted_admissions", "hdhd_7d", "wadmit_strain", [], {"rows": "obligate"}),
+    # --- v6: the turnover mechanism (a patient's own exit frees the bed the exposure counts) ---
+    ("same_day_hdhd_ed_arrivals", "hdhd_0_24h", "ed_strain", [], {"rows": "all"}),            # harm inside the exposure window, on demand a death cannot cause
+    ("same_day_hdhd_admissions", "hdhd_0_24h", "admit_strain", [], {"rows": "all"}),           # the same on admissions: a death frees a bed, so it leans up
+    ("prior_day_admissions", "hdhd_7d", "prior_admit_strain", [], {"drop": ["prior_admit_strain"]}),  # exposure before s: nothing the patient does after s can cause it
+    ("primary_no_exit", "hdhd_7d", "admit_strain", [], {"rows": "unit_exit_24h == 0"}),       # conditions on staying (leans toward harm); brackets the primary with it
+    ("obligate_ed_reduced_form", "hdhd_7d", "ed_strain", [], {"rows": "obligate"}),
+    ("weighted_census_validated_units", "hdhd_7d", "wcensus_strain", [], {"rows": "validated", "drop": ["occ_c10"]}),
+    ("weighted_occupancy_validated_units", "hdhd_7d", "wocc_strain", [], {"rows": "validated"}),
 ]
 
 
@@ -134,7 +146,7 @@ def gate_unit_years() -> pd.DataFrame:
 def fit_model(name, outcome, exposure, extra, opts):
     """Estimate rows for one logistic model, and its spline curve when asked for."""
     base = {"site": site, "model": name, "outcome": outcome, "exposure": exposure, "scale": "log_odds"}
-    df = days.query(opts["rows"]) if "rows" in opts else days
+    df = all_days if opts.get("rows") == "all" else days.query(opts["rows"]) if "rows" in opts else days
     df = df.dropna(subset=[outcome, exposure] + ([opts["iv"]] if "iv" in opts else []))
     kept = drop_constant_outcome_groups(df, outcome, "unit_year")
     if dropped := df["unit_year"].nunique() - kept["unit_year"].nunique():
@@ -202,6 +214,13 @@ for name, *spec in [*CHECKS, *MODELS]:
     if curve is not None:
         curves[name] = curve
     if name == CHECKS[-1][0]:  # balance tests sit with the checks, before the mortality models
+        try:  # v6: how much one patient's own exit inside the window moves their exposure (a refilled bed)
+            r = fit_ols(days.dropna(subset=["admit_strain"]), "admit_strain", ["unit_exit_24h", *FIXED_EFFECTS], CLUSTER)
+            rows.append({"site": site, "model": "exposure_shift_per_own_exit", "outcome": "admit_strain", "exposure": "unit_exit_24h",
+                         "scale": "linear", "term": "unit_exit_24h", "estimate": r.params["unit_exit_24h"], "se": r.bse["unit_exit_24h"],
+                         "n_obs": int(r.nobs), "status": "fit"})
+        except Exception as e:
+            rows.append({"site": site, "model": "exposure_shift_per_own_exit", "status": f"failed: {type(e).__name__}: {e}"[:300]})
         for cov in BALANCE:
             try:
                 rows += balance(cov)
