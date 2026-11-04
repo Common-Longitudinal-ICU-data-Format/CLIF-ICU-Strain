@@ -5,9 +5,14 @@ Every tunable analysis choice lives here so a reviewer finds them in one place.
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pandas as pd
+
+for _stream in (sys.stdout, sys.stderr):  # a Windows console is often cp1252 and clifpy logs non-ASCII: print '?' rather than crash
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
 
 # --- Cohort -------------------------------------------------------------------
 MIN_AGE = 18

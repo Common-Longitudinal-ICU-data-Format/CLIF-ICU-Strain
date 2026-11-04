@@ -8,6 +8,8 @@
      dataset so the templates run out of the box; change it to your site's CLIF tables directory
      for a real run.**
    - `filetype` — `"csv"` or `"parquet"`.
+     On Windows write the path with forward slashes (`"C:/CLIF/tables"`) or doubled backslashes: a single
+     backslash is an escape character in JSON.
    - `timezone` — your data's timezone, e.g. `"US/Eastern"` (required by clifpy).
    - `study_start`, `study_end` (optional) — the ICU admission window, for date-shifted data only; the
      study's is 2019-01-01 to 2025-01-01 (`utils/common.py`).
