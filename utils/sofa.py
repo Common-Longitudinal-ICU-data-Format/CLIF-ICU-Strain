@@ -16,7 +16,7 @@ def assign_windows(events: pl.LazyFrame, time_col: str, windows: pl.DataFrame) -
 
     `windows` has hospitalization_id, window_id, start, end; windows of one hospitalization must not overlap.
     This as-of join replaces clifpy's every-event-to-every-window join, which multiplies a hospitalization's
-    rows by its number of windows (vitals: 11M -> 256M rows at UCMC).
+    rows by its number of windows.
     """
     keep = [col for col in events.collect_schema().names() if col != "hospitalization_id"]
     return (events.sort("hospitalization_id", time_col)

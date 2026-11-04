@@ -1,7 +1,7 @@
 """Step 4: worst SOFA in the 24 h before each landmark (7am patient-day). Run after 03.
 
 Window per patient-day: [day_start - 24h, day_start). clifpy's compute_sofa_polars joins every event of
-a hospitalization to every one of its windows (vitals would be 256M rows at UCMC), so each event is first
+a hospitalization to every one of its windows, so each event is first
 keyed to its one window (utils.sofa.assign_windows) and cohort-limited copies of the five tables are
 written to intermediate_phi/<site>/sofa_input/ with window_id in place of hospitalization_id; clifpy then
 scores each window as if it were a hospitalization. The on_imv / on_pressor flags come from the raw
@@ -28,7 +28,7 @@ from utils.sofa import COMPONENTS, DOSE_COLS, VASOPRESSORS, assign_windows, resc
 config = c.load_config()
 phi = c.phi_dir(config["site_name"])
 tz = config["timezone"]
-CHUNK_WINDOWS = 50_000               # ~2 GB per clifpy call at UCMC
+CHUNK_WINDOWS = 50_000               # ~2 GB per clifpy call
 OUT_COLS =["hospitalization_id", "day_start", *COMPONENTS, "sofa_total", "device_category", *DOSE_COLS, "on_imv", "on_pressor"]
 TABLES = {  # table: (time column, other columns clifpy 0.5.0 reads, row filter)
     "clif_labs": ("lab_result_dttm", ["lab_category", "lab_value", "lab_value_numeric"], pl.col("lab_category").is_in(REQUIRED_LABS)),

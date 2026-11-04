@@ -1,7 +1,7 @@
 """Run the ICU strain pipeline at one site, in order, stopping at the first step that fails.
 
     uv run python run_pipeline.py                            # config/config.json, every step
-    uv run python run_pipeline.py config/config_rush.json    # another site's config
+    uv run python run_pipeline.py config/config_<site>.json  # another config
     uv run python run_pipeline.py --from 04_sofa             # start later (earlier outputs already there)
 
 Steps: 01_census -> 02_strain_figures -> 03_patient_days -> 04_sofa -> 05_models.
