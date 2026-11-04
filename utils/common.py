@@ -56,8 +56,8 @@ MIN_CELL_SIZE = 11                   # suppress any shared count below this
 
 
 def load_config() -> dict:
-    """config/config.json, or the file named by CLIF_CONFIG_PATH (the demo test uses this)."""
-    return json.loads(Path(os.environ.get("CLIF_CONFIG_PATH", "config/config.json")).read_text())
+    """config/config.json: the one config, edited for each site."""
+    return json.loads(Path("config/config.json").read_text())
 
 
 def study_window() -> tuple:

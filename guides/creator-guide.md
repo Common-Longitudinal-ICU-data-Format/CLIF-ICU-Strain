@@ -14,9 +14,8 @@ Step 4), not this file.
 
 ## Step 1 — Configure `config/config.json`
 
-Rename `config_template.json` to `config.json` and fill in your site-specific settings. Follow
-[`config/README.md`](../config/README.md) for details. The `.gitignore` in that directory keeps your
-config out of the remote repository.
+Edit `config/config.json` with your site's settings. Follow [`config/README.md`](../config/README.md)
+for details. It is the only config: there are no per-site config files.
 
 ## Step 2 — Set up the project environment
 

@@ -89,7 +89,6 @@ uv sync
 
 ```
 uv run python run_pipeline.py                            # config/config.json, every step
-uv run python run_pipeline.py config/config_<site>.json  # another config (config_*.json are git-ignored)
 uv run python run_pipeline.py --from 04_sofa             # resume after a failed step
 ```
 It runs these steps in order and stops at the first failure:

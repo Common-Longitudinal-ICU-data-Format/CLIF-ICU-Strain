@@ -1,3 +1,3 @@
-config.json
-config_*.json
-!config_template.json
+# config.json is the only config in this repo: edit it for your site and run.
+*.json
+!config.json

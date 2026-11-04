@@ -1,8 +1,8 @@
 ## Code directory
 
-Numbered scripts. `uv run python run_pipeline.py [config]` runs 01–05 in order from the repo root
+Numbered scripts. `uv run python run_pipeline.py` runs 01–05 in order from the repo root
 (`--from <step>` restarts later); each also runs alone with `uv run python code/<script>.py`. Each reads
-`config/config.json` (or the file named by `CLIF_CONFIG_PATH`, which `run_pipeline.py` sets) and writes to
+`config/config.json` and writes to
 the site's two output folders: `output/intermediate_phi/<site>/` (row-level, never shared) and
 `output/final_no_phi/<site>_upload_to_box/` (aggregates, n ≥ 11). See [`../output/README.md`](../output/README.md).
 

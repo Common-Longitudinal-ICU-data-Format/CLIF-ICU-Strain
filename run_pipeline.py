@@ -1,7 +1,6 @@
 """Run the ICU strain pipeline at one site, in order, stopping at the first step that fails.
 
     uv run python run_pipeline.py                            # config/config.json, every step
-    uv run python run_pipeline.py config/config_<site>.json  # another config
     uv run python run_pipeline.py --from 04_sofa             # start later (earlier outputs already there)
 
 Steps: 01_census -> 02_strain_figures -> 03_patient_days -> 04_sofa -> 05_models.
@@ -10,7 +9,6 @@ Upload output/final_no_phi/<site>_upload_to_box/ when it finishes.
 """
 
 import argparse
-import os
 import subprocess
 import sys
 import time
@@ -24,19 +22,14 @@ STEPS = ["01_census", "02_strain_figures", "03_patient_days", "04_sofa", "05_mod
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("config", nargs="?", default="config/config.json")
     ap.add_argument("--from", dest="start", choices=STEPS, default=STEPS[0], help="first step to run")
     args = ap.parse_args()
-    config = (ROOT / args.config).resolve()  # an absolute path stays as is
-    if not config.exists():
-        sys.exit(f"config not found: {config} (see config/README.md)")
-    os.environ["CLIF_CONFIG_PATH"] = str(config)  # every step reads its config from here
     cfg = c.load_config()
     if not Path(cfg["data_directory"]).exists():
         sys.exit(f"data_directory not found: {cfg['data_directory']}")
     steps = STEPS[STEPS.index(args.start):]
 
-    print(f"ICU strain at {cfg['site_name']}, config {config.name}: {' -> '.join(steps)}")
+    print(f"ICU strain at {cfg['site_name']}: {' -> '.join(steps)}")
     for step in steps:
         t = time.time()
         print(f"\n===== {step}  {time.strftime('%H:%M:%S')}", flush=True)
