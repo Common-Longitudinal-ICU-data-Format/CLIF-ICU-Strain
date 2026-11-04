@@ -48,7 +48,11 @@ def fit_logit(df: pd.DataFrame, outcome: str, terms: list, cluster: list):
 
     Two columns give two-way clustering (statsmodels takes a 2-column `groups`).
     """
-    return _fit(smf.logit(f"{outcome} ~ " + " + ".join(terms), df), df, cluster, disp=0, maxiter=200)
+    model = smf.logit(f"{outcome} ~ " + " + ".join(terms), df)
+    try:
+        return _fit(model, df, cluster, disp=0, maxiter=200)
+    except np.linalg.LinAlgError:  # Newton's Hessian went singular on the way (a near-separated dummy); L-BFGS never inverts it
+        return _fit(model, df, cluster, method="lbfgs", maxiter=2000, disp=0)
 
 
 def fit_ols(df: pd.DataFrame, outcome: str, terms: list, cluster: list):
