@@ -87,6 +87,9 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then from
 ```
 uv sync
 ```
+`uv.lock` pins every package for macOS, Linux and Windows. On Windows, run the same commands in PowerShell from
+the project folder; write `data_directory` with forward slashes (`"C:/CLIF/tables"`) or doubled backslashes; a
+console that is not UTF-8 shows clifpy's log symbols as `?`, which is harmless.
 
 ### 3. Run the pipeline
 
