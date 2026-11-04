@@ -75,8 +75,8 @@ Follow [`config/README.md`](config/README.md): set `site_name`, the path to your
 `filetype` and `timezone`. `data_directory` defaults to the bundled [`clif_demo/`](clif_demo)
 dataset, so the pipeline runs out of the box before you point it at real site data. The demo is
 MIMIC-derived and its dates are shifted per patient, so its census and capacity are meaningless: a
-demo run checks plumbing only. For the same reason **MIMIC cannot be used as a site for this project**;
-`config/config_mimic.json` runs full CLIF-MIMIC as a code test, and pooling skips it.
+demo run checks plumbing only. For the same reason **MIMIC cannot be used as a site for this project**,
+and pooling skips it.
 
 ### 2. Set up the project environment
 

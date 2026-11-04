@@ -89,5 +89,4 @@ Shared functions live in [`../utils/`](../utils): `common.py` (all tunable const
 
 The demo (`clif_demo/`) is MIMIC-derived and its dates are shifted per patient, so its census and capacity
 are meaningless: the demo run checks plumbing only. For the same reason **MIMIC cannot be used as a site
-for this project**: a full CLIF-MIMIC run (`config/config_mimic.json`, admissions 2105–2214) tests the code at
-scale and on real charting, and 06 and 07 skip `demo` and `mimic`.
+for this project**, and 06 and 07 skip `demo` and `mimic`.
