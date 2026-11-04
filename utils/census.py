@@ -31,7 +31,8 @@ def merge_round_trips(adt: pd.DataFrame, hours: float = ROUND_TRIP_HOURS, transp
     i = df[icu].assign(_opaque=opaque[icu])
     g = i.groupby("hospitalization_id")
     bridged = ((i["in_dttm"] - g["out_dttm"].shift()) <= pd.Timedelta(hours=hours)) \
-        & i["location_name"].eq(g["location_name"].shift()) & i["_opaque"].eq(g["_opaque"].shift())
+        & i["location_name"].eq(g["location_name"].shift()) & i["hospital_id"].eq(g["hospital_id"].shift()).fillna(False).astype(bool) \
+        & i["_opaque"].eq(g["_opaque"].shift())
     aggs = {col: "first" for col in adt.columns} | {"in_dttm": "min", "out_dttm": "max"}
     merged = i.groupby((~bridged).cumsum()).agg(aggs)
     return pd.concat([df[~icu & ~clear], merged]).sort_values(["hospitalization_id", "in_dttm"]).reset_index(drop=True)
@@ -40,28 +41,34 @@ def merge_round_trips(adt: pd.DataFrame, hours: float = ROUND_TRIP_HOURS, transp
 def collapse_icu_blocks(adt: pd.DataFrame, gap_hours: float = ICU_BLOCK_GAP_HOURS) -> pd.DataFrame:
     """Merge consecutive ICU ADT rows into contiguous ICU stays (any unit), one row each.
 
-    A new block starts when the previous location was not ICU, or when the gap
-    from the previous ICU row's out_dttm exceeds gap_hours. Non-ICU rows stay in
-    the sort so an intervening ward stay breaks the chain.
+    A new block starts when the previous location was not ICU, when the gap
+    from the previous ICU row's out_dttm exceeds gap_hours, or when the hospital
+    changes (a stitched encounter can span hospitals). Non-ICU rows stay in the
+    sort so an intervening ward stay breaks the chain. A block with any row
+    lacking out_dttm has no known end (NaT).
     """
     df = adt.sort_values(["hospitalization_id", "in_dttm"]).copy()
     df["_is_icu"] = is_icu(df)
 
     prev_out = df.groupby("hospitalization_id")["out_dttm"].shift()
     prev_icu = df.groupby("hospitalization_id")["_is_icu"].shift(fill_value=False)
+    prev_hospital = df.groupby("hospitalization_id")["hospital_id"].shift()
     gap = (df["in_dttm"] - prev_out).dt.total_seconds() / 3600.0
 
-    starts_block = (~prev_icu) | (gap > gap_hours) | gap.isna()
+    new_hospital = df["hospital_id"].ne(prev_hospital).fillna(True).astype(bool)  # clifpy strings compare to pyarrow bools
+    starts_block = (~prev_icu) | (gap > gap_hours) | gap.isna() | new_hospital
     df["_block"] = (starts_block & df["_is_icu"]).groupby(df["hospitalization_id"]).cumsum()
 
-    icu = df[df["_is_icu"]]
+    icu = df[df["_is_icu"]].assign(_open=lambda d: d["out_dttm"].isna())
     out = icu.groupby(["hospitalization_id", "_block"], as_index=False).agg(
         hospital_id=("hospital_id", "first"),
         icu_admit_dttm=("in_dttm", "min"),
         icu_discharge_dttm=("out_dttm", "max"),
+        _open=("_open", "any"),
     )
+    out.loc[out["_open"], "icu_discharge_dttm"] = pd.NaT  # max() skips a NaT: the stay would end at the previous row's exit
     out["block_index"] = out.groupby("hospitalization_id")["icu_admit_dttm"].rank("dense").astype(int) - 1
-    return out.drop(columns=["_block"])
+    return out.drop(columns=["_block", "_open"])
 
 
 def icu_intervals(adt: pd.DataFrame, adult_ids) -> pd.DataFrame:
@@ -69,10 +76,11 @@ def icu_intervals(adt: pd.DataFrame, adult_ids) -> pd.DataFrame:
 
     A patient holds one bed at a time, so each row is clipped at the start of
     that hospitalization's next ICU row: overlapping ADT rows would otherwise
-    count one patient twice.
+    count one patient twice. Rows without a location_name are kept (they hold
+    a bed in the hospital census); drop them before any unit-level use.
     """
     icu = adt[is_icu(adt) & adt["hospitalization_id"].isin(adult_ids)]
-    icu = icu.dropna(subset=["in_dttm", "out_dttm", "location_name"]).sort_values(["hospitalization_id", "in_dttm"])
+    icu = icu.dropna(subset=["in_dttm", "out_dttm"]).sort_values(["hospitalization_id", "in_dttm"])
     next_in = icu.groupby("hospitalization_id")["in_dttm"].shift(-1)
     icu = icu.assign(out_dttm=icu["out_dttm"].where(next_in.isna() | (icu["out_dttm"] <= next_in), next_in))
     cols = ["hospitalization_id", "hospital_id", "location_type", "location_name", "in_dttm", "out_dttm"]
@@ -88,7 +96,7 @@ def unit_stays(intervals: pd.DataFrame, gap_hours: float = ICU_BLOCK_GAP_HOURS) 
     iv = intervals.sort_values(["hospitalization_id", "in_dttm"])
     g = iv.groupby("hospitalization_id")
     near = (iv["in_dttm"] - g["out_dttm"].shift()) <= pd.Timedelta(hours=gap_hours)
-    same_unit = iv["location_name"].eq(g["location_name"].shift()).fillna(False).astype(bool)
+    same_unit = (iv["location_name"].eq(g["location_name"].shift()) & iv["hospital_id"].eq(g["hospital_id"].shift())).fillna(False).astype(bool)
     new = ~(near & same_unit)
     iv = iv.assign(from_icu=near & new, _stay=new.cumsum())
     return iv.groupby("_stay").agg(

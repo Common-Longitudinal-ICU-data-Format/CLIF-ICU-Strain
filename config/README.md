@@ -10,7 +10,10 @@
      for a real run.**
    - `filetype` — `"csv"` or `"parquet"`.
    - `timezone` — your data's timezone, e.g. `"US/Eastern"` (required by clifpy).
-   - `output_directory` — where clifpy writes logs and validation results (e.g. `"./output"`).
+   - `study_start`, `study_end` (optional) — the ICU admission window, for date-shifted data only; the
+     study's is 2019-01-01 to 2025-01-01 (`utils/common.py`). `config_mimic.json` sets MIMIC's 2105–2215.
+
+Outputs always go to `output/` (or `CLIF_OUTPUT_ROOT`).
 
 This file uses the **clifpy config schema**. The scripts in `code/` read it directly; set
 `CLIF_CONFIG_PATH` to point them at a different file. `run_pipeline.py` does this for you: keep

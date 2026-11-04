@@ -31,13 +31,19 @@ hospital records only so it is the same at every site.
    `resp_rate_set`), **medication_admin_continuous** (`admin_dttm`, `med_category`, `med_dose`,
    `med_dose_unit`) — SOFA over the 24h before each 7am (`clifpy` `compute_sofa_polars`), and
    whether the patient was on invasive ventilation or a vasopressor in that window.
+6. **code_status** (optional: `patient_id`, `start_dttm`, `code_status_category`) — new limitation orders,
+   a process outcome; without it that outcome is NA.
 
 ## Cohort identification
 
+Hospitalizations of one patient that start within 6 hours of the previous discharge (an ED encounter
+and the admission after it, a transfer between a system's hospitals) are first stitched into one
+encounter with `clifpy`'s `stitch_encounters`; the encounter keeps the first admission and the last
+discharge and its category, and every step below works on encounters.
 Adults (`age_at_admission >= 18`) with an ICU stay (consecutive `adt` rows with
 `location_category == 'icu'`, merged across gaps of ≤1 hour; OR, radiology and dialysis trips with the
 patient back in the same unit within 12 hours are folded into the stay) whose ICU admission falls in
-the study window (2018-2024). One row per ICU stay per 7am at which the patient is already in the unit
+the study window (2019-2024). One row per ICU stay per 7am at which the patient is already in the unit
 (a landmark), from the 60-day census burn-in to 8 days before the data end. Rows in a unit-year under
 4 beds, or with a death or hospice discharge in the 24 hours after the landmark, are excluded.
 
@@ -54,6 +60,8 @@ Each site uploads the contents of `output/final_no_phi/<site_name>_upload_to_box
   unit-years without capacity); cohort flow in ICU stays, patients and landmarks, the outcome split
   into in-hospital death and hospice discharge, and a text row saying whether Charlson and COVID came
   from present-on-admission or all codes (with the share flagged POA and the share in ICD10CM).
+- `unit_year_gate.csv` — per unit-year, the positive control (do admissions displace incumbents?) and
+  whether it validates the unit-year.
 - `table1.csv`, `model_estimates.csv`, `spline_primary.png` — cohort description; estimates (unrounded,
   per +0.1 admission strain and per interquartile range) for the exposure checks, the primary model,
   the future and past placebos, the secondary outcomes and the sensitivity models; the primary's
@@ -67,7 +75,8 @@ Follow [`config/README.md`](config/README.md): set `site_name`, the path to your
 `filetype` and `timezone`. `data_directory` defaults to the bundled [`clif_demo/`](clif_demo)
 dataset, so the pipeline runs out of the box before you point it at real site data. The demo is
 MIMIC-derived and its dates are shifted per patient, so its census and capacity are meaningless: a
-demo run checks plumbing only. For the same reason **MIMIC cannot be used as a site for this project**.
+demo run checks plumbing only. For the same reason **MIMIC cannot be used as a site for this project**;
+`config/config_mimic.json` runs full CLIF-MIMIC as a code test, and pooling skips it.
 
 ### 2. Set up the project environment
 

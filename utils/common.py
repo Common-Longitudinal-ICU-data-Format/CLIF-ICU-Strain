@@ -11,8 +11,10 @@ import pandas as pd
 
 # --- Cohort -------------------------------------------------------------------
 MIN_AGE = 18
-STUDY_START = "2018-01-01"           # ICU admissions in [start, end); the census burn-in trims the first weeks
+STUDY_START = "2019-01-01"           # ICU admissions in [start, end); the census burn-in trims the first weeks
 STUDY_END = "2025-01-01"
+STITCH_HOURS = 6                     # a hospitalization starting this soon after the previous discharge is the same encounter (clifpy default)
+DEV_SITES = {"demo", "mimic"}        # code-test runs, never pooled: MIMIC shifts dates per patient, so its census is not real
 
 # --- Census and strain ------------------------------------------------------------
 ICU_LOCATION = "icu"
@@ -24,6 +26,7 @@ CENSUS_BURN_IN_DAYS = 60             # census undercounts until stays begun befo
 COVID_SURGE = ("2020-03-01", "2022-03-01")   # [start, end); for Corbett's capacity variant and the covariate
 MIN_UNIT_BEDS = int(os.environ.get("CLIF_MIN_UNIT_BEDS", 4))  # D6: smaller unit-years get no capacity; env lets the demo run
 MAX_UNIT_BEDS, MAX_UNITS = 60, 30    # above these, location_name is probably a floor, not a unit
+MAX_UNNAMED_ICU_PCT = 2              # ICU rows without a location_name count in the hospital census only; warn above this share
 MIN_END_CENSUS_PCT = 85              # last 60 days' census vs the 60 before; lower suggests a discharged-only extract
 HOSPITAL = ["hospital_id"]
 UNIT = ["hospital_id", "location_name"]
@@ -45,7 +48,7 @@ ED_LOCATION = "ed"                   # ADT rows whose arrivals are demand that b
 READMIT_HOURS = 72                   # ICU readmission after an ICU discharge inside the exposure window
 LIMITATION_HOURS = 48                # new DNR/DNI (or any other limitation) order within this of the landmark
 AFTER_HOURS = (18, 6)                # ICU discharge from 18:00 to 06:00 local
-NON_LIMITATION_CODES = {"full", "other"}   # any other code_status_category is a limitation (dnr, dnar, dnr/dni, udnr)
+NON_LIMITATION_CODES = {"full", "presume full", "other"}   # any other code_status_category is a limitation (dnr, dnar, udnr, dnr/dni, dnar/dni, dni_only, and)
 MIN_GATE_EVENTS = 11                 # a unit-year needs this many discharges to be gated (A1)
 
 # --- Disclosure ---------------------------------------------------------------------
@@ -58,8 +61,10 @@ def load_config() -> dict:
 
 
 def study_window() -> tuple:
-    """(start, end) for ICU admissions; env override lets the date-shifted demo data run."""
-    return os.environ.get("CLIF_STUDY_START", STUDY_START), os.environ.get("CLIF_STUDY_END", STUDY_END)
+    """(start, end) for ICU admissions: env, else the config's study_start/study_end (date-shifted data: demo, MIMIC)."""
+    cfg = load_config()
+    return (os.environ.get("CLIF_STUDY_START", cfg.get("study_start", STUDY_START)),
+            os.environ.get("CLIF_STUDY_END", cfg.get("study_end", STUDY_END)))
 
 
 def output_root() -> Path:

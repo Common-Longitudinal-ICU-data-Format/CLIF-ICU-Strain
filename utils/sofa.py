@@ -7,7 +7,7 @@ import polars as pl
 COMPONENTS = ["sofa_cv_97", "sofa_coag", "sofa_liver", "sofa_resp", "sofa_cns", "sofa_renal"]
 PRESSORS = ["dopamine", "epinephrine", "norepinephrine", "dobutamine"]
 DOSE_COLS = [f"{p}_mcg_kg_min" for p in PRESSORS]
-VASOPRESSORS = ["norepinephrine", "epinephrine", "dopamine"]   # dobutamine is an inotrope; clifpy 0.5.0 loads no vasopressin/phenylephrine
+VASOPRESSORS = ["norepinephrine", "epinephrine", "dopamine", "vasopressin", "phenylephrine", "angiotensin"]  # on_pressor; dobutamine is an inotrope
 ADVANCED_SUPPORT = {"imv", "nippv", "cpap"}
 
 
@@ -42,7 +42,8 @@ def rescore_sofa(sofa: pd.DataFrame) -> pd.DataFrame:
          sofa["map"] < 70,
          sofa["map"] >= 70],
         [4, 3, 2, 1, 0], default=np.nan)
-    if "on_pressor" in sofa:  # a dose clifpy could not weight-normalise (no weight charted) is unknown, not "no pressor"
+    if "on_pressor" in sofa:  # a pressor clifpy could not weight-normalise (no weight) or does not score (vasopressin, phenylephrine,
+        # angiotensin) leaves CV unknown, not scored from a MAP the drug is holding up
         unweighable = sofa[DOSE_COLS].isna().all(axis=1) & sofa["on_pressor"].fillna(False).astype(bool)
         cv = np.where(unweighable, np.nan, cv)
 

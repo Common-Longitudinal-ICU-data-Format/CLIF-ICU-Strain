@@ -30,7 +30,7 @@ PALETTE = ["#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7"]  # Okabe-Ito, 
 
 src = Path(os.environ.get("CLIF_POOL_DIR", c.output_root() / "final_no_phi"))
 out = c.output_root() / "final_no_phi" / "pooled"
-sites = sorted(p.name.replace("_upload_to_box", "") for p in src.glob("*_upload_to_box") if p.name != "demo_upload_to_box")
+sites = sorted(n for n in (p.name.replace("_upload_to_box", "") for p in src.glob("*_upload_to_box")) if n.lower() not in c.DEV_SITES)
 system = {s: f"System {chr(65 + i)}" for i, s in enumerate(sites)}
 colour = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(sites)}
 

@@ -148,7 +148,7 @@ def fit_model(name, outcome, exposure, extra, opts):
     lin = fit_logit(df, outcome, ["per10", *extra, *terms], cluster)
     meta = {**base, "n_obs": int(lin.nobs), "n_events": int(lin.model.endog.sum()), "status": converged(lin)}
     out += [{**meta, "term": t, "estimate": lin.params[t], "se": lin.bse[t]} for t in ["per10", *extra] if t != "_resid"]
-    q = df[exposure].quantile([0.01, 0.25, 0.5, 0.75, 0.99])
+    q = df.loc[lin.model.data.row_labels, exposure].quantile([0.01, 0.25, 0.5, 0.75, 0.99])  # the rows the model kept
     out.append({**meta, "term": "per_iqr", "x": q[0.75], "ref": q[0.25],
                 "estimate": lin.params["per10"] * (q[0.75] - q[0.25]) * 10, "se": lin.bse["per10"] * (q[0.75] - q[0.25]) * 10})
     if not opts.get("spline"):

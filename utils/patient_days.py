@@ -11,6 +11,7 @@ import pandas as pd
 
 from .common import (AFTER_HOURS, COVID_ICD10_PREFIX, EXPOSURE_HOURS, LIMITATION_HOURS, MIN_AGE, NON_LIMITATION_CODES,
                      OUTCOME_DAYS, OUTCOME_DAYS_LONG, PLACEBO_OFFSET_DAYS, READMIT_HOURS, UNIT)
+from .encounters import death_times
 
 EXPOSURE = pd.Timedelta(hours=EXPOSURE_HOURS)
 
@@ -86,8 +87,8 @@ def own_admissions(days: pd.DataFrame, stays: pd.DataFrame, lo: pd.Series, hi: p
     Every stay counts, not only the one holding the landmark: a bounce-back inside the window
     is the patient's own admission, not someone else's. `lo` and `hi` share `days`' index.
     """
-    d = days[["hospitalization_id", "location_name"]].assign(_lo=lo, _hi=hi, _row=np.arange(len(days)))
-    m = d.merge(stays[["hospitalization_id", "location_name", "in_dttm"]], on=["hospitalization_id", "location_name"])
+    d = days[["hospitalization_id", *UNIT]].assign(_lo=lo, _hi=hi, _row=np.arange(len(days)))
+    m = d.merge(stays[["hospitalization_id", *UNIT, "in_dttm"]], on=["hospitalization_id", *UNIT])  # a unit is hospital + name
     n = m[(m["in_dttm"] >= m["_lo"]) & (m["in_dttm"] < m["_hi"])].groupby("_row").size()
     return pd.Series(n.reindex(range(len(days)), fill_value=0).to_numpy(), index=days.index)
 
@@ -155,31 +156,32 @@ def add_outcomes(days: pd.DataFrame, hosp: pd.DataFrame, patient: pd.DataFrame,
                  blocks: pd.DataFrame | None = None, code_status: pd.DataFrame | None = None) -> pd.DataFrame:
     """Outcomes after the exposure window, from hospital records at the patient level (D2).
 
-    An HDHD event is an in-hospital death (discharged Expired, at discharge_dttm) or a hospice
-    discharge, in any hospitalization of the patient. hdhd_7d: event in [s+24h, s+8d);
+    `hosp` is the stitched encounter table (step 01), so a transfer's interim discharge category is
+    replaced by the encounter's final one. An HDHD event is an in-hospital death (discharged Expired,
+    at discharge_dttm) or a hospice discharge, in any encounter of the patient. hdhd_7d: event in [s+24h, s+8d);
     hdhd_30d: in [s+24h, s+31d); hdhd_48h: in [s+24h, s+48h) (the next day); hdhd_hosp: at any
-    time from s+24h to the end of this hospitalization; death_7d: in-hospital death only;
-    death_any_7d adds patient.death_dttm (post-discharge linkage, whose completeness differs by site).
+    time from s+24h to the end of this hospitalization (NA while it is still open); death_7d: in-hospital death only;
+    death_any_7d adds patient.death_dttm (post-discharge linkage, whose completeness differs by site),
+    reconciled by utils.encounters.death_times.
     `eligible` is False when an event falls inside the exposure window [s, s+24h).
     icu_discharge_24h and unit_exit_24h (left the ICU, or the unit, inside the exposure
     window) are the positive-control outcomes.
     v4 process outcomes: among landmarks discharged from the ICU inside the window, readmit_72h
     (a later ICU stay of the same hospitalization begins within 72 h of that discharge) and
-    after_hours_discharge (18:00-06:00); among landmarks whose last code-status order before s
-    is not a limitation (or who have none), new_limitation_48h (a DNR/DNI or other limitation
-    order in [s, s+48h)). NA elsewhere.
+    after_hours_discharge (18:00-06:00); among landmarks whose last code-status order of this encounter
+    before s is not a limitation (or who have none since admission), new_limitation_48h (a DNR/DNI or
+    other limitation order in [s, s+48h)). NA elsewhere.
     """
     if days.empty:
-        return days.assign(eligible=True, hdhd_7d=0, hdhd_30d=0, hdhd_48h=0, hdhd_hosp=0, death_7d=0, death_any_7d=0,
+        return days.assign(eligible=True, hdhd_7d=0, hdhd_30d=0, hdhd_48h=0, hdhd_hosp=np.nan, death_7d=0, death_any_7d=0,
                            icu_discharge_24h=0, unit_exit_24h=0, readmit_72h=np.nan, after_hours_discharge=np.nan,
                            new_limitation_48h=np.nan)
     expired, hospice = _events(hosp, ["expired"]), _events(hosp, ["hospice"])
-    linked = patient[["patient_id", "death_dttm"]].rename(columns={"death_dttm": "t"})
     s = days["day_start"]
     fu = s + EXPOSURE
     hdhd = _event_time(days, pd.concat([expired, hospice]))
     dead = _event_time(days, expired)
-    any_ = _event_time(days, pd.concat([expired, linked]))
+    any_ = _event_time(days, death_times(hosp, patient))  # Expired discharge time, else death_dttm fixed for date-only
 
     def within(t, horizon):
         return ((t >= fu) & (t < s + pd.Timedelta(days=horizon + 1))).astype(int)
@@ -188,7 +190,7 @@ def add_outcomes(days: pd.DataFrame, hosp: pd.DataFrame, patient: pd.DataFrame,
     out = days.assign(
         eligible=~(hdhd < fu),  # event-free when follow-up starts: a death inside the exposure window is not its effect
         hdhd_7d=within(hdhd, OUTCOME_DAYS), hdhd_30d=within(hdhd, OUTCOME_DAYS_LONG), hdhd_48h=within(hdhd, 1),
-        hdhd_hosp=((hdhd >= fu) & (hdhd <= days["discharge_dttm"])).astype(int),  # this hospitalization's end
+        hdhd_hosp=((hdhd >= fu) & (hdhd <= days["discharge_dttm"])).astype(float).where(days["discharge_dttm"].notna()),  # NA: still open
         death_7d=within(dead, OUTCOME_DAYS), death_any_7d=within(any_, OUTCOME_DAYS),
         icu_discharge_24h=discharged.astype(int),
         unit_exit_24h=(days["stay_out"] < fu).astype(int),
@@ -205,9 +207,11 @@ def add_outcomes(days: pd.DataFrame, hosp: pd.DataFrame, patient: pd.DataFrame,
     else:
         out["readmit_72h"] = np.nan
     if code_status is not None and len(code_status):
-        orders = code_status[["patient_id", "start_dttm", "code_status_category"]].rename(columns={"start_dttm": "t"})
-        orders = orders.assign(limited=~orders["code_status_category"].astype(str).str.lower().isin(NON_LIMITATION_CODES))
-        at_s = _event_time(days, orders, "backward", value="limited")  # the order in force at s (NaN: none ever)
+        orders = (code_status[["patient_id", "start_dttm", "code_status_category"]].rename(columns={"start_dttm": "t"})
+                  .dropna(subset=["code_status_category"]))  # an uncategorized order is neither full code nor a limitation
+        orders = orders.assign(limited=~orders["code_status_category"].str.lower().isin(NON_LIMITATION_CODES))
+        last_t = _event_time(days, orders, "backward")
+        at_s = _event_time(days, orders, "backward", value="limited").where(last_t >= days["admission_dttm"])  # resets at admission
         nxt = _event_time(days, orders[orders["limited"]], "forward")
         new = (nxt >= s) & (nxt < s + pd.Timedelta(hours=LIMITATION_HOURS))
         out["new_limitation_48h"] = new.astype(float).where(~at_s.fillna(False).astype(bool))  # NA when limited at s
